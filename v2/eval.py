@@ -31,7 +31,7 @@ from lm_eval.api.model import LM
 from lm_eval.api.registry import register_model
 from tqdm import tqdm
 import os
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig, BitsAndBytesConfig
 import json
 import time
 import types
@@ -60,6 +60,10 @@ class Fast_dLLM_v2EvalHarness(LM):
         small_block_size=8,
         bd_size=32,
         threshold=0.9,
+        load_in_4bit=False,
+        load_in_8bit=False,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
         **kwargs,
     ):
 
@@ -74,6 +78,18 @@ class Fast_dLLM_v2EvalHarness(LM):
         model_kwargs = {}
         if self.accelerator is not None:
             model_kwargs.update({'device_map': {'': f'{self.accelerator.device}'}})
+        
+        if load_in_4bit:
+            model_kwargs.update({'quantization_config': BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type=bnb_4bit_quant_type,
+                bnb_4bit_compute_dtype=bnb_4bit_compute_dtype,
+            )})
+        
+        if load_in_8bit:
+            model_kwargs.update({'quantization_config': BitsAndBytesConfig(
+                load_in_8bit=True,
+            )})
         
         self.model = AutoModelForCausalLM.from_pretrained(
             model_path, 
