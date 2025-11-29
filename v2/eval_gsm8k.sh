@@ -13,7 +13,7 @@ model_path="Efficient-Large-Model/Fast_dLLM_v2_7B"
 
 # 4. Task Configuration
 task="gsm8k"
-batch_size=128  # Increased from 32. If you hit OOM (Out of Memory), reduce to 48 or 32.
+batch_size=256  # Increased from 32. If you hit OOM (Out of Memory), reduce to 48 or 32.
 
 echo "Starting Fast-dLLM v2 evaluation on ${task} with batch size ${batch_size}..."
 
@@ -28,4 +28,4 @@ accelerate launch --num_processes 1 eval.py \
     --model fast_dllm_v2 \
     --fewshot_as_multiturn \
     --apply_chat_template \
-    --model_args model_path=${model_path},threshold=1,show_speed=True,device_map="auto",load_in_4bit=True,bnb_4bit_quant_type=nf4,bnb_4bit_compute_dtype=bfloat16
+    --model_args model_path=${model_path},threshold=1,show_speed=True,device_map="auto",load_in_8bit=True

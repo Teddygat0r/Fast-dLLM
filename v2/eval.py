@@ -108,7 +108,8 @@ class Fast_dLLM_v2EvalHarness(LM):
             self._rank = self.accelerator.local_process_index
             self._world_size = self.accelerator.num_processes
         else: 
-            self.model = self.model.to(device)
+            if not load_in_8bit:
+                self.model = self.model.to(device)
             self._rank = 0
             self._world_size = 1
 
