@@ -2,19 +2,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 import torch
 import numpy as np
 import random
+from optimum.quanto import quantize, qint4, qint8, freeze
 
 model_name = "Efficient-Large-Model/Fast_dLLM_v2_7B"
-
-bnb_config_4bit = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.float16,
-    bnb_4bit_use_double_quant=True,
-)
-
-bnb_config_8bit = BitsAndBytesConfig(
-    load_in_8bit=True,
-)
 
 print(f"Loading model: {model_name}...")
 
@@ -23,10 +13,20 @@ torch.cuda.empty_cache()
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
     torch_dtype="auto",
-    device_map="cuda:0",
+    device_map="cpu",
     trust_remote_code=True
-    # quantization_config=bnb_config_8bit,
 )
+
+quantize(model, weights=qint4, activations=qint8, exclude=["lm_head"])
+
+print("Freezing model to integer representation...")
+freeze(model)
+print("Loading quantized model...")
+state_dict = torch.load("models/fast_dllm_quantized_w4a8.pt")
+model.load_state_dict(state_dict)
+
+print("Moving model to CUDA...")
+model.to("cuda:0")
 
 # --- MEMORY DIAGNOSTICS START ---
 def print_memory_usage(step_name):
@@ -102,7 +102,7 @@ while True:
         block_size=32,
         max_new_tokens=2048,
         small_block_size=8,
-        threshold=0.9,
+        threshold=1,
     )
     
     response = tokenizer.decode(generated_ids[0][model_inputs["input_ids"].shape[1]:], skip_special_tokens=True)
@@ -112,6 +112,6 @@ while True:
     messages.append({"role": "assistant", "content": response})
     
     # Optional: Check memory after a generation turn to see how much context is consuming
-    # print_memory_usage("After Generation")
+    print_memory_usage("After Generation")
     
     print("-" * 50)
