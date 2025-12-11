@@ -5,7 +5,7 @@ import random
 from optimum.quanto import quantize, qint4, qint8, freeze
 
 model_name = "Efficient-Large-Model/Fast_dLLM_v2_7B"
-model_quantized_path = "models/fast_dllm_quantized_w4a8_full.pt"
+model_quantized_path = "models/fast_dllm_quantized_w4a8_more_full.pt"
 
 print(f"Loading quantized model from {model_quantized_path}...")
 print("Using fast loading method (direct model load)...")

@@ -86,17 +86,17 @@ print("Calibration complete.")
 print("Freezing model to integer representation...")
 freeze(model)
 
-save_path = "models/fast_dllm_quantized_w4a8_full.pt"
+save_path = "models/fast_dllm_quantized_w4a8_more_full.pt"
 print(f"Saving complete quantized model to {save_path}...")
 torch.save(model, save_path)
 print(f"✓ Complete quantized model saved to {save_path}")
 
 # Also save state_dict for backwards compatibility
-save_path_state_dict = "models/fast_dllm_quantized_w4a8.pt"
+save_path_state_dict = "models/fast_dllm_quantized_w4a8_more.pt"
 print(f"\nSaving state_dict for backwards compatibility to {save_path_state_dict}...")
 torch.save(model.state_dict(), save_path_state_dict)
 print(f"✓ State dict saved to {save_path_state_dict}")
 
 print("\nSummary:")
-print("- Full model: fast_dllm_quantized_w4a8_full.pt (recommended for fast loading)")
-print("- State dict: fast_dllm_quantized_w4a8.pt (backwards compatible)")
+print("- Full model: fast_dllm_quantized_w4a8_more_full.pt (recommended for fast loading)")
+print("- State dict: fast_dllm_quantized_w4a8_more.pt (backwards compatible)")
