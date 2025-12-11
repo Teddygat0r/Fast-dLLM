@@ -3,11 +3,12 @@ import numpy as np
 import gradio as gr
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from optimum.quanto import quantize, qint4, qint8, freeze
 import time
 import random
 import types
+import os
 from generation_functions import setup_model_with_custom_generation
-
 
 
 # Check available GPU
@@ -25,20 +26,101 @@ def fix_seed(seed):
 
 fix_seed(42)
 
-# Load model and tokenizer - using Fast_dLLM model
 model_name = "Efficient-Large-Model/Fast_dLLM_v2_7B"
+
+print(f"Loading model: {model_name}...")
+
+torch.cuda.empty_cache()
+
+# Check if complete quantized model exists
+import os
+full_model_path = "models/fast_dllm_quantized_w4a8_full.pt"
+state_dict_path = "models/fast_dllm_quantized_w4a8.pt"
+
+if os.path.exists(full_model_path):
+    # Fast loading: Load complete quantized model directly
+    print(f"Loading complete quantized model from {full_model_path}...")
+    print("This method is much faster as it avoids reconstructing the quantization structure.")
+    
+    # Pre-load model class definitions so transformers_modules is populated
+    print("Pre-loading model class definitions...")
+    _ = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype="auto",
+        device_map="meta",  # Use 'meta' device to avoid loading weights
+        trust_remote_code=True
+    )
+    print("✓ Model class loaded")
+    
+    # Now load the quantized checkpoint
+    # PyTorch 2.6+ requires weights_only=False for complete models with custom classes
+    print("Loading quantized checkpoint...")
+    model = torch.load(full_model_path, map_location=device_accelerated, weights_only=False)
+    print("✓ Model loaded successfully!")
+    
+else:
+    # Fallback: Traditional method - load base model, quantize, then load state_dict
+    print(f"Complete model not found. Using fallback method (slower)...")
+    print(f"Tip: Run quantize_chatbot_activations.py to generate {full_model_path} for faster loading.")
+    
+    # Load model on CPU first for quantization
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype="auto",
+        device_map="cpu",
+        trust_remote_code=True
+    )
+
+    # Quantize model
+    print("Quantizing model...")
+    quantize(model, weights=qint4, activations=qint8, exclude=["lm_head"])
+
+    print("Freezing model to integer representation...")
+    freeze(model)
+
+    # Load quantized weights
+    if os.path.exists(state_dict_path):
+        print(f"Loading quantized model weights from {state_dict_path}...")
+        state_dict = torch.load(state_dict_path)
+        model.load_state_dict(state_dict)
+        print("✓ Weights loaded successfully!")
+    else:
+        print(f"WARNING: Neither {full_model_path} nor {state_dict_path} found!")
+        print("The model will run but may not be properly quantized.")
+
+    print("Moving model to CUDA...")
+    model.to(device_accelerated)
+
+
+# Set up custom generation functions for visualization
+model = setup_model_with_custom_generation(model)
+
+# Memory diagnostics function
+def print_memory_usage(step_name):
+    # Convert to GB
+    allocated = torch.cuda.memory_allocated() / (1024 ** 3)
+    reserved = torch.cuda.memory_reserved() / (1024 ** 3)
+    
+    print(f"\n--- Memory Stats: {step_name} ---")
+    print(f"1. Actual Model Weights (Allocated): {allocated:.2f} GB")
+    print(f"2. Total Reserved (nvidia-smi):      {reserved:.2f} GB")
+    
+    # Calculate the 'waste' or buffer
+    overhead = reserved - allocated
+    print(f"3. Buffer/Overhead:                  {overhead:.2f} GB")
+    print("-" * 40)
+    
+    return f"Allocated: {allocated:.2f} GB | Reserved: {reserved:.2f} GB | Overhead: {overhead:.2f} GB"
+
+# Print GPU stats after model load
+memory_stats = print_memory_usage("After Model Load")
+
+# Print Hugging Face's internal calculation of footprint
+footprint = model.get_memory_footprint() / (1024 ** 3)
+print(f"HF Model Footprint:                  {footprint:.2f} GB\n")
+
+# Load tokenizer
 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-
-# Load Fast_dLLM model instance
-model_accelerated = AutoModelForCausalLM.from_pretrained(
-    model_name,
-    torch_dtype="auto",
-    device_map=device_accelerated,
-    trust_remote_code=True
-)
-
-# Set up custom generation functions
-model_accelerated = setup_model_with_custom_generation(model_accelerated)
 
 # Constants
 MASK_TOKEN = "[MASK]"
@@ -47,11 +129,10 @@ question_ai = '''Write a piece of code to implement quick sort.'''
 question_math = '''A deep-sea monster rises from the waters once every hundred years to feast on a ship and sate its hunger. Over three hundred years, it has consumed 847 people. Ships have been built larger over time, so each new ship has twice as many people as the last ship. How many people were on the ship the monster ate in the first hundred years?'''
 question_gsm8k = '''Question: Skyler has 100 hats on his hand with the colors red, blue, and white. Half of the hats are red, 3/5 of the remaining hats are blue, and the rest are white. How many white hats does Skyler have?'''
 
-# Removed parse_constraints function - no longer needed
 
 def format_chat_history(history):
     """
-    Format chat history for the LLaDA model
+    Format chat history for the model
     
     Args:
         history: List of [user_message, assistant_message] pairs
@@ -68,13 +149,12 @@ def format_chat_history(history):
     return messages
 
 
-
 @torch.no_grad()
-def generate_response_with_visualization_fast_dllm(model, tokenizer, device, messages, max_new_tokens=1024, 
+def generate_response_with_visualization(model, tokenizer, device, messages, max_new_tokens=1024, 
                                          temperature=0.0, block_length=32,
                                          threshold=0.9, top_p=0.9):
     """
-    Generate text with Fast_dLLM model with visualization using custom generation function
+    Generate text with quantized Fast_dLLM model with visualization
     
     Args:
         messages: List of message dictionaries with 'role' and 'content'
@@ -121,9 +201,6 @@ def generate_response_with_visualization_fast_dllm(model, tokenizer, device, mes
     yield final_text
 
 
-
-
-
 css = '''
 .category-legend{display:none}
 .message, .bubble, .chatbot .message, .chatbot .bubble {
@@ -146,17 +223,26 @@ css = '''
     align-items: center !important;
 }
 '''
+
 def create_chatbot_demo():
     with gr.Blocks(css=css) as demo:
-        gr.Markdown("# Fast-dLLM: Training-free Acceleration of Diffusion LLM by Enabling KV Cache and Parallel Decoding")
-        gr.Markdown("[code](https://github.com/NVlabs/Fast-dLLM), [project page](https://nvlabs.github.io/Fast-dLLM/)")
+        gr.Markdown("# Fast-dLLM Quantized Chatbot with Visualization")
+        gr.Markdown("**Quantized Model (4-bit weights, 8-bit activations)** - [code](https://github.com/NVlabs/Fast-dLLM), [project page](https://nvlabs.github.io/Fast-dLLM/)")
         
         # STATE MANAGEMENT
         chat_history_cache = gr.State([])
         
         # UI COMPONENTS
         
-        # Input area - moved above Fast-dLLM Accelerated section
+        # Display memory stats at the top
+        with gr.Row():
+            memory_display = gr.Textbox(
+                label="GPU Memory Usage",
+                value=memory_stats,
+                interactive=False
+            )
+        
+        # Input area
         with gr.Group():
             with gr.Row(elem_id="input-row"):
                 user_input = gr.Textbox(
@@ -168,11 +254,11 @@ def create_chatbot_demo():
                 send_btn = gr.Button("Send", scale=1)
                 clear_btn = gr.Button("Clear Conversation", scale=1)
         
-        # Fast-dLLM Accelerated conversation interface
-        gr.Markdown("## Fast-dLLM Model (7B Parameters)")
+        # Quantized model conversation interface
+        gr.Markdown("## Quantized Fast-dLLM Model (7B Parameters, 4-bit/8-bit)")
         with gr.Row():
             with gr.Column(scale=2):
-                chatbot_ui = gr.Chatbot(label="Conversation (Fast-dLLM Model)", height=520)
+                chatbot_ui = gr.Chatbot(label="Conversation (Quantized Model)", height=520)
             with gr.Column(scale=2):
                 with gr.Row():
                     generation_time = gr.Textbox(
@@ -198,7 +284,7 @@ def create_chatbot_demo():
                     elem_classes=["highlighted-text-container"]
                 )
         
-        # Examples moved below the conversation interfaces
+        # Examples
         gr.Examples(
             examples=[
                 [question_ai],
@@ -263,7 +349,7 @@ def create_chatbot_demo():
             if not message.strip():
                 # Return current state unchanged
                 history_cache_for_display = history_cache.copy()
-                return history_cache, history_cache_for_display, "", [], [], "wait for generation", "wait for generation"
+                return history_cache, history_cache_for_display, "", [], [], "wait for generation", "wait for generation", memory_stats
                 
             # Add user message to history (without response yet)
             history_cache = history_cache.copy()
@@ -276,20 +362,21 @@ def create_chatbot_demo():
             message_out = ""
             
             # Return immediately to update UI with user message
-            return history_cache, history_cache_for_display, message_out, [], [], "processing...", "processing..."
+            return history_cache, history_cache_for_display, message_out, [], [], "processing...", "processing...", memory_stats
             
 
         
-        def accelerated_response(history_cache, max_new_tokens, temperature, top_p, block_length, threshold, visualization_delay):
-            """Generate accelerated model response independently"""
+        def generate_response(history_cache, max_new_tokens, temperature, top_p, block_length, threshold, visualization_delay):
+            """Generate model response with visualization"""
             if not history_cache:
-                return history_cache, [], [], "", "wait for generation", "wait for generation"
+                return history_cache, [], [], "", "wait for generation", "wait for generation", memory_stats
                 
             # Get the last user message
             last_user_message = history_cache[-1]["content"]
             
             try:
                 # Use history_cache directly as it's already in the right format
+                # But we need to convert it to the format expected by the model
                 messages = []
                 for msg in history_cache:
                     if msg["role"] in ["user", "assistant"]:
@@ -298,10 +385,10 @@ def create_chatbot_demo():
                 # Start timing
                 start_time = time.time()
                 
-                # Generate with accelerated model and yield states in real-time
+                # Generate with quantized model and yield states in real-time
                 with torch.no_grad():
-                    generator = generate_response_with_visualization_fast_dllm(
-                        model_accelerated, tokenizer, device_accelerated,
+                    generator = generate_response_with_visualization(
+                        model, tokenizer, device_accelerated,
                         messages, max_new_tokens, temperature, block_length, threshold, top_p
                     )
                     
@@ -310,38 +397,43 @@ def create_chatbot_demo():
                     for item in generator:
                         if isinstance(item, list):  # Visualization state
                             states.append(item)
-                            yield history_cache, item, [], "", "processing...", "processing..."
+                            yield history_cache, item, [], "", "processing...", "processing...", memory_stats
                         else:  # Final text
-                            cache_response_text = item
+                            response_text = item
                             break
                 
-                accelerated_complete_time = time.time() - start_time
-                cache_generation_time_str = f"{accelerated_complete_time:.2f}s"
+                complete_time = time.time() - start_time
+                generation_time_str = f"{complete_time:.2f}s"
                 
                 # Calculate throughput
-                cache_response_tokens = tokenizer.encode(cache_response_text, add_special_tokens=False)
-                cache_num_tokens = len(cache_response_tokens)
-                cache_throughput = cache_num_tokens / accelerated_complete_time if accelerated_complete_time > 0 else 0
-                cache_throughput_str = f"{cache_throughput:.2f} tokens/s"
+                response_tokens = tokenizer.encode(response_text, add_special_tokens=False)
+                num_tokens = len(response_tokens)
+                tokens_per_sec = num_tokens / complete_time if complete_time > 0 else 0
+                throughput_str = f"{tokens_per_sec:.2f} tokens/s"
                 
                 # Add assistant response to history
-                history_cache.append({"role": "assistant", "content": cache_response_text})
+                history_cache.append({"role": "assistant", "content": response_text})
+                
+                # Get updated memory stats
+                current_memory_stats = print_memory_usage("After Generation")
                 
                 # Final yield with complete information and start slow motion visualization
                 if states:
                     # First, yield the final real-time state
-                    yield history_cache, states[-1], states[0], cache_response_text, cache_generation_time_str, cache_throughput_str
+                    yield history_cache, states[-1], states[0], response_text, generation_time_str, throughput_str, current_memory_stats
                     
                     # Then animate through slow motion visualization
                     for state in states[1:]:
                         time.sleep(visualization_delay)
-                        yield history_cache, states[-1], state, cache_response_text, cache_generation_time_str, cache_throughput_str
+                        yield history_cache, states[-1], state, response_text, generation_time_str, throughput_str, current_memory_stats
                     
             except Exception as e:
                 error_msg = f"Error: {str(e)}"
                 print(error_msg)
+                import traceback
+                traceback.print_exc()
                 error_vis = [(error_msg, "red")]
-                yield history_cache, error_vis, error_vis, error_msg, "Error", "Error"
+                yield history_cache, error_vis, error_vis, error_msg, "Error", "Error", memory_stats
         
         def clear_conversation():
             """Clear the conversation history"""
@@ -351,6 +443,9 @@ def create_chatbot_demo():
             time_str = "wait for generation"
             throughput_str = "wait for generation"
             
+            # Update memory stats after clearing
+            current_memory_stats = print_memory_usage("After Clear")
+            
             return (
                 empty_history,  # chat_history_cache
                 empty_history,  # chatbot_ui
@@ -358,7 +453,8 @@ def create_chatbot_demo():
                 empty_vis,      # output_vis
                 empty_vis,      # output_vis_slow
                 time_str,       # generation_time
-                throughput_str  # throughput
+                throughput_str,  # throughput
+                current_memory_stats  # memory_display
             )
         
         # EVENT HANDLERS
@@ -367,7 +463,7 @@ def create_chatbot_demo():
         clear_btn.click(
             fn=clear_conversation,
             inputs=[],
-            outputs=[chat_history_cache, chatbot_ui, current_response, output_vis, output_vis_slow, generation_time, throughput]
+            outputs=[chat_history_cache, chatbot_ui, current_response, output_vis, output_vis_slow, generation_time, throughput, memory_display]
         )
         
         # User message submission flow (2-step process)
@@ -375,33 +471,33 @@ def create_chatbot_demo():
         msg_submit = user_input.submit(
             fn=user_message_submitted,
             inputs=[user_input, chat_history_cache, max_new_tokens],
-            outputs=[chat_history_cache, chatbot_ui, user_input, output_vis, output_vis_slow, generation_time, throughput]
+            outputs=[chat_history_cache, chatbot_ui, user_input, output_vis, output_vis_slow, generation_time, throughput, memory_display]
         )
         
         # Also connect the send button
         send_click = send_btn.click(
             fn=user_message_submitted,
             inputs=[user_input, chat_history_cache, max_new_tokens],
-            outputs=[chat_history_cache, chatbot_ui, user_input, output_vis, output_vis_slow, generation_time, throughput]
+            outputs=[chat_history_cache, chatbot_ui, user_input, output_vis, output_vis_slow, generation_time, throughput, memory_display]
         )
         
-        # Step 2: Generate accelerated model response
+        # Step 2: Generate model response
         msg_submit.then(
-            fn=accelerated_response,
+            fn=generate_response,
             inputs=[
                 chat_history_cache, max_new_tokens, 
                 temperature, top_p, block_length, threshold, visualization_delay
             ],
-            outputs=[chatbot_ui, output_vis, output_vis_slow, current_response, generation_time, throughput]
+            outputs=[chatbot_ui, output_vis, output_vis_slow, current_response, generation_time, throughput, memory_display]
         )
         
         send_click.then(
-            fn=accelerated_response,
+            fn=generate_response,
             inputs=[
                 chat_history_cache, max_new_tokens, 
                 temperature, top_p, block_length, threshold, visualization_delay
             ],
-            outputs=[chatbot_ui, output_vis, output_vis_slow, current_response, generation_time, throughput]
+            outputs=[chatbot_ui, output_vis, output_vis_slow, current_response, generation_time, throughput, memory_display]
         )
         
     return demo
@@ -409,4 +505,4 @@ def create_chatbot_demo():
 # Launch the demo
 if __name__ == "__main__":
     demo = create_chatbot_demo()
-    demo.queue().launch(server_port=10086, share=True)
+    demo.queue().launch(server_port=10087, share=True)

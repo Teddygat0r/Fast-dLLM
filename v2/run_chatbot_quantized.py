@@ -5,28 +5,26 @@ import random
 from optimum.quanto import quantize, qint4, qint8, freeze
 
 model_name = "Efficient-Large-Model/Fast_dLLM_v2_7B"
+model_quantized_path = "models/fast_dllm_quantized_w4a8_full.pt"
 
-print(f"Loading model: {model_name}...")
-
+print(f"Loading quantized model from {model_quantized_path}...")
+print("Using fast loading method (direct model load)...")
 torch.cuda.empty_cache()
 
-model = AutoModelForCausalLM.from_pretrained(
+# IMPORTANT: We need to load the model class first so that transformers_modules
+# is populated before we try to unpickle the saved model
+print("Pre-loading model class definitions from HuggingFace...")
+_ = AutoModelForCausalLM.from_pretrained(
     model_name,
     torch_dtype="auto",
-    device_map="cpu",
+    device_map="meta",  # Use 'meta' device to avoid loading weights
     trust_remote_code=True
 )
+print("✓ Model class loaded")
 
-quantize(model, weights=qint4, activations=qint8, exclude=["lm_head"])
-
-print("Freezing model to integer representation...")
-freeze(model)
-print("Loading quantized model...")
-state_dict = torch.load("models/fast_dllm_quantized_w4a8.pt")
-model.load_state_dict(state_dict)
-
-print("Moving model to CUDA...")
-model.to("cuda:0")
+print(f"Loading quantized checkpoint...")
+model = torch.load(model_quantized_path, map_location="cuda:0", weights_only=False)
+print("✓ Model loaded successfully!")
 
 # --- MEMORY DIAGNOSTICS START ---
 def print_memory_usage(step_name):
@@ -102,7 +100,7 @@ while True:
         block_size=32,
         max_new_tokens=2048,
         small_block_size=8,
-        threshold=1,
+        threshold=0.9,
     )
     
     response = tokenizer.decode(generated_ids[0][model_inputs["input_ids"].shape[1]:], skip_special_tokens=True)
