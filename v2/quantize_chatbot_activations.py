@@ -1,7 +1,24 @@
+"""
+Quantization script for Fast-dLLM with SmoothQuant preprocessing.
+
+This script applies INT4 weight and INT8 activation quantization to the model.
+It is recommended to run smooth_quant_chatbot.py first to apply SmoothQuant
+weight preprocessing, which improves quantization quality.
+
+Usage:
+    # First apply SmoothQuant (recommended)
+    python smooth_quant_chatbot.py
+    
+    # Then load smoothed weights and quantize
+    python quantize_chatbot_activations.py --load-smoothed
+"""
+
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 import torch
 import numpy as np
 import random
+import argparse
+import os
 from data.quantization_calibration_dataset import FastDLLMCalibrationDataset
 from optimum.quanto import quantize, Calibration, qint4, qint8, freeze
 from torch.utils.data import DataLoader
@@ -9,6 +26,12 @@ from torch.utils.data import DataLoader
 model_name = "Efficient-Large-Model/Fast_dLLM_v2_7B"
 BATCH_SIZE = 32
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+SMOOTHED_WEIGHTS_PATH = "models/fast_dllm_smoothquant.pt"
+
+# Layers to exclude from quantization (keep in higher precision)
+# lm_head: output layer, critical for generation quality
+# embed_tokens: input embeddings, often kept in FP16
+QUANTIZATION_EXCLUDE = ["lm_head", "embed_tokens"]
 
 print(f"Loading model: {model_name}...")
 
@@ -21,7 +44,26 @@ model = AutoModelForCausalLM.from_pretrained(
     trust_remote_code=True
 )
 
-quantize(model, weights=qint4, activations=qint8, exclude=["lm_head"])
+# Check if smoothed weights should be loaded
+parser = argparse.ArgumentParser(description="Quantize Fast-dLLM model")
+parser.add_argument("--load-smoothed", action="store_true",
+                    help="Load SmoothQuant-preprocessed weights before quantization")
+args = parser.parse_args()
+
+if args.load_smoothed:
+    if os.path.exists(SMOOTHED_WEIGHTS_PATH):
+        print(f"\nLoading SmoothQuant-preprocessed weights from {SMOOTHED_WEIGHTS_PATH}...")
+        state_dict = torch.load(SMOOTHED_WEIGHTS_PATH, map_location=DEVICE, weights_only=True)
+        model.load_state_dict(state_dict)
+        print("✓ Smoothed weights loaded")
+    else:
+        print(f"\nWARNING: Smoothed weights not found at {SMOOTHED_WEIGHTS_PATH}")
+        print("Proceeding without SmoothQuant preprocessing.")
+        print("For better results, run: python smooth_quant_chatbot.py first")
+
+print(f"\nQuantizing model: weights=qint4, activations=qint8")
+print(f"Excluding layers from quantization: {QUANTIZATION_EXCLUDE}")
+quantize(model, weights=qint4, activations=qint8, exclude=QUANTIZATION_EXCLUDE)
 
 # --- MEMORY DIAGNOSTICS START ---
 def print_memory_usage(step_name):
