@@ -64,6 +64,7 @@ class Fast_dLLM_v2EvalHarness(LM):
         load_in_8bit=False,
         bnb_4bit_quant_type="nf4",
         bnb_4bit_compute_dtype=torch.bfloat16,
+        smoothquant_model_path=None,
         **kwargs,
     ):
 
@@ -97,6 +98,7 @@ class Fast_dLLM_v2EvalHarness(LM):
             torch_dtype=torch.bfloat16, 
             **model_kwargs
         )
+        
         self.model.eval()
 
         self.model.mdm_sample = types.MethodType(generation_functions.Fast_dLLM_QwenForCausalLM.batch_sample, self.model)
@@ -112,6 +114,17 @@ class Fast_dLLM_v2EvalHarness(LM):
                 self.model = self.model.to(device)
             self._rank = 0
             self._world_size = 1
+        
+        # Load SmoothQuant weights if provided (after model is on correct device)
+        if smoothquant_model_path is not None:
+            if os.path.exists(smoothquant_model_path):
+                print(f"Loading SmoothQuant weights from {smoothquant_model_path}...")
+                state_dict = torch.load(smoothquant_model_path, map_location=self.device, weights_only=True)
+                self.model.load_state_dict(state_dict)
+                print("✓ SmoothQuant weights loaded")
+            else:
+                print(f"WARNING: SmoothQuant model path not found: {smoothquant_model_path}")
+                print("  Continuing with base model weights...")
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         
