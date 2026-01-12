@@ -207,9 +207,7 @@ def generate_with_prefix_cache(model, prompt, steps=128, gen_length=128, block_l
 
     return x, nfe
 
-
 @torch.no_grad()
-@torch.compile(mode="max-autotune", fullgraph=True)
 def generate_with_dual_cache(
     model, prompt, steps=128, gen_length=128, block_length=128, temperature=0.,
     remasking="low_confidence", mask_id=126336, threshold=None, factor=None
@@ -262,12 +260,13 @@ def generate_with_dual_cache(
 
         # In-place update via torch.where (no tensor-slice assignment with mask)
         x = torch.where(transfer_index, x0, x)
-        nfe += 1  # counted initial + this update
 
         # 2) Semi-autoregressive refinement, fixed number of steps (graph-friendly)
         #    Each iteration runs on the current block with KV-cache and replace_position
         for i in range(1, steps_per_block):
             # Evaluate logits only for current block with cache
+            if (x[:, s:e] == mask_id).sum() == 0:
+                break
             logits_blk = model(
                 x[:, s:e], past_key_values=past_key_values, use_cache=True, replace_position=replace_position
             ).logits  # shape expected by get_transfer_index*
@@ -336,6 +335,17 @@ def get_transfer_index(
         # Transfer all masked positions whose confidence >= threshold
         # (No top-k; purely threshold-based)
         transfer_index = mask_index & (confidence >= threshold)
+
+        # at least one token is transferred "always unmask max c^i"
+        max_conf_indices = torch.argmax(confidence, dim=1, keepdim=True) # (B, 1)
+        force_mask = torch.zeros_like(transfer_index).scatter_(1, max_conf_indices, True)
+
+        # (Above Threshold) OR (Is Max Confidence)
+        transfer_index = transfer_index | force_mask
+
+        # Safety: do not unmask something that was not masked (consider fully unmasked rows)
+        transfer_index = transfer_index & mask_index
+
         return x0, transfer_index
 
     # Else: per-row top-k with varying k (num_transfer_tokens), fully batched
@@ -385,6 +395,10 @@ def get_transfer_index_dynamic(logits, temperature, remasking, mask_index, x, nu
     num_transfer_tokens = mask_index.sum(dim=1, keepdim=True)
     
     for j in range(confidence.shape[0]):
+        num_tokens = int(num_transfer_tokens[j].item())
+        if num_tokens == 0:
+            continue
+        
         ns=list(range(1,num_transfer_tokens[j]+1))
         es=[factor/(n+1) for n in ns]
         threshs=[1-e for e in es]
@@ -411,8 +425,8 @@ def main():
     # model = LLaDAModelLM.from_pretrained('GSAI-ML/LLaDA-8B-Instruct', trust_remote_code=True, torch_dtype=torch.bfloat16).to(device).eval()
     # tokenizer = AutoTokenizer.from_pretrained('GSAI-ML/LLaDA-8B-Instruct', trust_remote_code=True)
 
-    model = LLaDAModelLM.from_pretrained('/home/hans/.cache/huggingface/hub/models--GSAI-ML--LLaDA-8B-Instruct/snapshots/9275bf8f5a5687507189baf4657e91c51b2be338', trust_remote_code=True, torch_dtype=torch.bfloat16).to(device).eval()
-    tokenizer = AutoTokenizer.from_pretrained('/home/hans/.cache/huggingface/hub/models--GSAI-ML--LLaDA-8B-Instruct/snapshots/9275bf8f5a5687507189baf4657e91c51b2be338', trust_remote_code=True)
+    model = LLaDAModelLM.from_pretrained('GSAI-ML/LLaDA-8B-Instruct', trust_remote_code=True, torch_dtype=torch.bfloat16).to(device).eval()
+    tokenizer = AutoTokenizer.from_pretrained('GSAI-ML/LLaDA-8B-Instruct', trust_remote_code=True)
     prompt = "Lily can run 12 kilometers per hour for 4 hours. After that, she runs 6 kilometers per hour. How many kilometers can she run in 8 hours?"
 
     # Add special tokens for the Instruct model. The Base model does not require the following two lines.

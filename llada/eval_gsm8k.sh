@@ -43,7 +43,7 @@ accelerate launch eval_llada.py --tasks ${task} --num_fewshot ${num_fewshot} \
 # dual cache+parallel
 accelerate launch eval_llada.py --tasks ${task} --num_fewshot ${num_fewshot} \
 --confirm_run_unsafe_code --model llada_dist \
---model_args model_path=${model_path},gen_length=${length},steps=${steps},block_length=${block_length},use_cache=True,dual_cache=True,threshold=0.9,show_speed=True
+--model_args model_path=${model_path},gen_length=${length},steps=${length},block_length=${block_length},use_cache=True,dual_cache=True,threshold=0.9,show_speed=True
 
 # prefix cache+parallel factor
 accelerate launch eval_llada.py --tasks ${task} --num_fewshot ${num_fewshot} \
@@ -53,4 +53,4 @@ accelerate launch eval_llada.py --tasks ${task} --num_fewshot ${num_fewshot} \
 # dual cache+parallel factor
 accelerate launch eval_llada.py --tasks ${task} --num_fewshot ${num_fewshot} \
 --confirm_run_unsafe_code --model llada_dist \
---model_args model_path=${model_path},gen_length=${length},steps=${steps},block_length=${block_length},use_cache=True,dual_cache=True,factor=${factor},show_speed=True
+--model_args model_path=${model_path},gen_length=${length},steps=${length},block_length=${block_length},use_cache=True,dual_cache=True,factor=${factor},show_speed=True
