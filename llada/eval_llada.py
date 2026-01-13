@@ -37,6 +37,14 @@ from generate import generate, generate_with_prefix_cache, generate_with_dual_ca
 from model.modeling_llada import LLaDAModelLM
 import json
 import time
+# #region agent log
+DEBUG_LOG_PATH = "/home/joshuaz/dllm/Fast-dLLM/.cursor/debug.log"
+def _debug_log(session_id, run_id, hypothesis_id, location, message, data):
+    try:
+        with open(DEBUG_LOG_PATH, 'a') as f:
+            f.write(json.dumps({"sessionId": session_id, "runId": run_id, "hypothesisId": hypothesis_id, "location": location, "message": message, "data": data, "timestamp": time.time() * 1000}) + "\n")
+    except: pass
+# #endregion
 def set_seed(seed):
     torch.manual_seed(seed)
     random.seed(seed)
@@ -67,6 +75,8 @@ class LLaDAEvalHarness(LM):
         save_dir=None,
         show_speed=False,
         dual_cache=False,
+        smoothed_model_path=None,
+        quantized_model_path=None,
         **kwargs,
     ):
         '''
@@ -97,13 +107,50 @@ class LLaDAEvalHarness(LM):
         model_kwargs = {}
         if self.accelerator is not None:
             model_kwargs.update({'device_map': {'': f'{self.accelerator.device}'}})
-        config = AutoConfig.from_pretrained(model_path)
-        config.flash_attention = True
-        self.model = LLaDAModelLM.from_pretrained(model_path, trust_remote_code=True, torch_dtype=torch.bfloat16, config=config, **model_kwargs)
+        # Load quantized model if provided (takes precedence)
+        if quantized_model_path is not None and quantized_model_path != '':
+            if os.path.exists(quantized_model_path):
+                print(f"Loading quantized model from {quantized_model_path}...")
+                # Pre-load model class to ensure transformers_modules is populated
+                _ = LLaDAModelLM.from_pretrained(
+                    model_path,
+                    torch_dtype=torch.bfloat16,
+                    device_map="meta",  # Use 'meta' to avoid loading weights
+                    trust_remote_code=True
+                )
+                # Load the quantized model
+                self.model = torch.load(quantized_model_path, map_location=device, weights_only=False)
+                # Ensure model is on the correct device
+                if self.accelerator is None:
+                    self.model = self.model.to(device)
+                print("✓ Quantized model loaded")
+            else:
+                print(f"WARNING: Quantized model path not found at {quantized_model_path}")
+                print("Falling back to loading base model...")
+                quantized_model_path = None  # Fall through to normal loading
+        
+        # Load base model if not using quantized model
+        if quantized_model_path is None or quantized_model_path == '':
+            config = AutoConfig.from_pretrained(model_path)
+            config.flash_attention = True
+            self.model = LLaDAModelLM.from_pretrained(model_path, trust_remote_code=True, torch_dtype=torch.bfloat16, config=config, **model_kwargs)
+            
+            # Load smoothed model weights if provided
+            if smoothed_model_path is not None and smoothed_model_path != '':
+                if os.path.exists(smoothed_model_path):
+                    print(f"Loading SmoothQuant-preprocessed weights from {smoothed_model_path}...")
+                    state_dict = torch.load(smoothed_model_path, map_location=device, weights_only=True)
+                    self.model.load_state_dict(state_dict, strict=False)
+                    print("✓ Smoothed weights loaded")
+                else:
+                    print(f"WARNING: Smoothed model path not found at {smoothed_model_path}")
+                    print("Proceeding with base model weights.")
+        
         self.model.eval()
 
         self.device = torch.device(device)
         if self.accelerator is not None:
+            # For quantized models, we still need to prepare with accelerator
             self.model = self.accelerator.prepare(self.model)
             self.device = torch.device(f'{self.accelerator.device}')
             self._rank = self.accelerator.local_process_index
@@ -305,9 +352,14 @@ class LLaDAEvalHarness(LM):
         start_time = time.time()
 
         for batch in tqdm(batched_requests, desc="Generating..."):
+            # #region agent log
+            batch_start_time = time.time()
+            _debug_log("debug-session", "run1", "H3", "eval_llada.py:320", "Batch processing start", {"batch_size": len(batch), "batch_idx": len(output) // self.batch_size if self.batch_size > 0 else 0})
+            # #endregion
             batched_input_ids = []
             max_len = 0
             pad_len = []
+            seq_lens = []
             for req in batch:
                 question = req.args[0]
                 if self.is_instruct:
@@ -318,24 +370,38 @@ class LLaDAEvalHarness(LM):
                     user_input = question
                     input_ids = self.tokenizer(user_input)['input_ids']
                 batched_input_ids.append(input_ids)
+                seq_lens.append(len(input_ids))
                 max_len = max(max_len, len(input_ids))
                 pad_len.append(max_len - len(input_ids))
+            
+            # #region agent log
+            _debug_log("debug-session", "run1", "H2", "eval_llada.py:338", "Before padding", {"batch_size": len(batch), "seq_lens": seq_lens, "max_len": max_len, "total_padding": sum(pad_len), "padding_ratio": sum(pad_len) / (max_len * len(batch)) if max_len > 0 else 0})
+            padding_start = time.time()
+            # #endregion
             
             # pad batched_input_ids to the same length
             batched_input_ids = [torch.cat([torch.full((1, max_len - len(input_ids)), self.tokenizer.pad_token_id, dtype=torch.long, device=self.device), torch.tensor(input_ids, dtype=torch.long, device=self.device).unsqueeze(0)], dim=1) for input_ids in batched_input_ids]
             batched_input_ids = torch.cat(batched_input_ids, dim=0)
             batched_input_ids = batched_input_ids.to(self.device)
             
-            if self.batch_size == 1:
-                attention_mask = None
-            else:
-                attention_mask = torch.zeros((batched_input_ids.shape[0], 1, max_len+self.gen_length, max_len+self.gen_length), device=self.device, dtype=torch.bool)
-                for i in range(len(pad_len)):
-                    attention_mask[i, :, pad_len[i]:, pad_len[i]:] = True
+            # #region agent log
+            padding_time = time.time() - padding_start
+            _debug_log("debug-session", "run1", "H2", "eval_llada.py:340", "After padding", {"padding_time_ms": padding_time * 1000})
+            # #endregion
+            
+            # #region agent log
+            _debug_log("debug-session", "run1", "H1", "eval_llada.py:366", "Attention mask skipped (not used by generate functions)", {})
+            # #endregion
+            # Note: Attention mask creation removed - generate() functions don't accept attention_mask parameter,
+            # so creating it was wasting ~1ms + 14MB memory per batch with no benefit
 
 
             stop_tokens = req.args[1]['until']
             input_ids = batched_input_ids
+            # #region agent log
+            gen_start = time.time()
+            _debug_log("debug-session", "run1", "H4", "eval_llada.py:352", "Generation start", {"batch_size": input_ids.shape[0], "input_seq_len": input_ids.shape[1], "gen_length": self.gen_length, "use_cache": self.use_cache})
+            # #endregion
             if self.use_cache:
                 if self.dual_cache:
                     generated_answer, nfe = generate_with_dual_cache(self.model, input_ids, steps=self.steps, gen_length=self.gen_length, block_length=self.block_length, 
@@ -346,6 +412,11 @@ class LLaDAEvalHarness(LM):
             else:
                 generated_answer, nfe = generate(self.model, input_ids, steps=self.steps, gen_length=self.gen_length, block_length=self.block_length, 
                                         temperature=0, remasking=self.remasking, mask_id=self.mask_id, threshold=self.threshold, factor=self.factor)
+            # #region agent log
+            gen_time = time.time() - gen_start
+            batch_time = time.time() - batch_start_time
+            _debug_log("debug-session", "run1", "H3", "eval_llada.py:361", "Generation complete", {"gen_time_ms": gen_time * 1000, "batch_time_ms": batch_time * 1000, "nfe": nfe, "nfe_per_sample": nfe / input_ids.shape[0] if input_ids.shape[0] > 0 else 0})
+            # #endregion
 
             if self.is_instruct and 'task_id' in req.doc and str(req.doc['task_id']).lower().startswith('humaneval'):
                 generated_answer_ids = generated_answer[:, input_ids.shape[1]:]

@@ -19,10 +19,20 @@ import torch
 import numpy as np
 import torch.nn.functional as F
 import os
+import json
+import time
 from transformers import AutoTokenizer, AutoModel
 from model.modeling_llada import LLaDAModelLM
 
 from torch.cuda import nvtx
+# #region agent log
+DEBUG_LOG_PATH = "/home/joshuaz/dllm/Fast-dLLM/.cursor/debug.log"
+def _debug_log(session_id, run_id, hypothesis_id, location, message, data):
+    try:
+        with open(DEBUG_LOG_PATH, 'a') as f:
+            f.write(json.dumps({"sessionId": session_id, "runId": run_id, "hypothesisId": hypothesis_id, "location": location, "message": message, "data": data, "timestamp": time.time() * 1000}) + "\n")
+    except: pass
+# #endregion
 
 def add_gumbel_noise(logits, temperature):
     '''
@@ -107,6 +117,9 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=128, tempera
     steps = steps // num_blocks
 
     nfe = 0
+    # #region agent log
+    _debug_log("debug-session", "run1", "H4", "generate.py:109", "Generate function start", {"batch_size": prompt.shape[0], "prompt_len": prompt.shape[1], "gen_length": gen_length, "steps": steps, "num_blocks": num_blocks})
+    # #endregion
     for num_block in range(num_blocks):
         block_mask_index = (x[:, prompt.shape[1] + num_block * block_length: prompt.shape[1] + (num_block + 1) * block_length] == mask_id)
         num_transfer_tokens = get_num_transfer_tokens(block_mask_index, steps)
@@ -114,7 +127,15 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=128, tempera
         while True:
             nfe += 1
             mask_index = (x == mask_id)
+            # #region agent log
+            forward_start = time.time()
+            # #endregion
             logits = model(x).logits
+            # #region agent log
+            forward_time = time.time() - forward_start
+            if nfe % 10 == 1:  # Log every 10th forward pass to avoid spam
+                _debug_log("debug-session", "run1", "H4", "generate.py:117", "Forward pass", {"nfe": nfe, "forward_time_ms": forward_time * 1000, "batch_size": x.shape[0], "seq_len": x.shape[1]})
+            # #endregion
             mask_index[:, prompt.shape[1] + (num_block + 1) * block_length:] = 0
             if factor is None:
                 x0, transfer_index = get_transfer_index(logits, temperature, remasking, mask_index, x, num_transfer_tokens[:, i] if threshold is None else None, threshold)
@@ -394,7 +415,16 @@ def get_transfer_index_dynamic(logits, temperature, remasking, mask_index, x, nu
     transfer_index = torch.zeros_like(x0, dtype=torch.bool, device=x0.device)
     num_transfer_tokens = mask_index.sum(dim=1, keepdim=True)
     
+    # #region agent log
+    loop_start = time.time()
+    batch_size = confidence.shape[0]
+    _debug_log("debug-session", "run1", "H5", "generate.py:395", "get_transfer_index_dynamic loop start", {"batch_size": batch_size})
+    # #endregion
+    
     for j in range(confidence.shape[0]):
+        # #region agent log
+        iter_start = time.time()
+        # #endregion
         num_tokens = int(num_transfer_tokens[j].item())
         if num_tokens == 0:
             continue
@@ -416,7 +446,16 @@ def get_transfer_index_dynamic(logits, temperature, remasking, mask_index, x, nu
 
         _, select_index = torch.topk(confidence[j], k=top_i)
         transfer_index[j, select_index] = True
+        # #region agent log
+        iter_time = time.time() - iter_start
+        if j == 0 or j == batch_size - 1:  # Log first and last iteration
+            _debug_log("debug-session", "run1", "H5", "generate.py:417", "Loop iteration", {"batch_idx": j, "iter_time_ms": iter_time * 1000, "num_tokens": num_tokens})
+        # #endregion
 
+    # #region agent log
+    loop_time = time.time() - loop_start
+    _debug_log("debug-session", "run1", "H5", "generate.py:420", "get_transfer_index_dynamic loop complete", {"total_loop_time_ms": loop_time * 1000, "avg_per_sample_ms": loop_time * 1000 / batch_size if batch_size > 0 else 0})
+    # #endregion
     return x0, transfer_index
 
 def main():
