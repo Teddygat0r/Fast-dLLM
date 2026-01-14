@@ -107,23 +107,43 @@ class LLaDAEvalHarness(LM):
         model_kwargs = {}
         if self.accelerator is not None:
             model_kwargs.update({'device_map': {'': f'{self.accelerator.device}'}})
+        
+        # Track which path should be used for the tokenizer (may differ for quantized models)
+        tokenizer_model_path = model_path
+
         # Load quantized model if provided (takes precedence)
         if quantized_model_path is not None and quantized_model_path != '':
             if os.path.exists(quantized_model_path):
-                print(f"Loading quantized model from {quantized_model_path}...")
-                # Pre-load model class to ensure transformers_modules is populated
-                _ = LLaDAModelLM.from_pretrained(
-                    model_path,
-                    torch_dtype=torch.bfloat16,
-                    device_map="meta",  # Use 'meta' to avoid loading weights
-                    trust_remote_code=True
-                )
-                # Load the quantized model
-                self.model = torch.load(quantized_model_path, map_location=device, weights_only=False)
-                # Ensure model is on the correct device
-                if self.accelerator is None:
-                    self.model = self.model.to(device)
-                print("✓ Quantized model loaded")
+                # New path: quantized model saved via `save_pretrained` (directory with config + weights)
+                if os.path.isdir(quantized_model_path):
+                    print(f"Loading quantized model (HF/Quanto format) from {quantized_model_path}...")
+                    load_kwargs = {
+                        "trust_remote_code": True,
+                    }
+                    load_kwargs.update(model_kwargs)
+                    # Follow the recommended loading pattern printed in quantize_llada_w4a8.py
+                    self.model = LLaDAModelLM.from_pretrained(
+                        quantized_model_path,
+                        **load_kwargs,
+                    )
+                    tokenizer_model_path = quantized_model_path
+                    print("✓ Quantized model loaded from directory")
+                else:
+                    # Backwards-compatible path: quantized model saved as a torch .pt file
+                    print(f"Loading quantized model from {quantized_model_path} (torch .pt)...")
+                    # Pre-load model class to ensure transformers_modules is populated
+                    _ = LLaDAModelLM.from_pretrained(
+                        model_path,
+                        torch_dtype=torch.bfloat16,
+                        device_map="meta",  # Use 'meta' to avoid loading weights
+                        trust_remote_code=True,
+                    )
+                    # Load the quantized model object
+                    self.model = torch.load(quantized_model_path, map_location=device, weights_only=False)
+                    # Ensure model is on the correct device
+                    if self.accelerator is None:
+                        self.model = self.model.to(device)
+                    print("✓ Quantized model loaded from .pt file")
             else:
                 print(f"WARNING: Quantized model path not found at {quantized_model_path}")
                 print("Falling back to loading base model...")
@@ -131,9 +151,7 @@ class LLaDAEvalHarness(LM):
         
         # Load base model if not using quantized model
         if quantized_model_path is None or quantized_model_path == '':
-            config = AutoConfig.from_pretrained(model_path)
-            config.flash_attention = True
-            self.model = LLaDAModelLM.from_pretrained(model_path, trust_remote_code=True, torch_dtype=torch.bfloat16, config=config, **model_kwargs)
+            self.model = LLaDAModelLM.from_pretrained(model_path, trust_remote_code=True, torch_dtype=torch.bfloat16, **model_kwargs)
             
             # Load smoothed model weights if provided
             if smoothed_model_path is not None and smoothed_model_path != '':
@@ -159,7 +177,8 @@ class LLaDAEvalHarness(LM):
             self.model = self.model.to(device)
 
         self.mask_id = mask_id
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        # Use the same path as the model for tokenizer when loading quantized models
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_model_path, trust_remote_code=True)
 
         self.mc_num = mc_num
         self.batch_size = int(batch_size)

@@ -43,8 +43,10 @@ class LLaDACalibrationDataset(Dataset):
         print(f"Building Calibration Buffer with Mask ID: {self.mask_token_id}...")
 
         # Fill buffer
-        # We pick (samples / len(target_ratios)) items for each ratio
-        samples_per_ratio = samples // len(target_ratios)
+        # We pick (samples / len(target_ratios)) items for each ratio.
+        # Ensure at least 1 sample per ratio so the buffer is never empty,
+        # even when `samples` < len(target_ratios) (e.g., small batch tests).
+        samples_per_ratio = max(1, samples // len(target_ratios))
         
         iter_data = iter(raw_data)
         

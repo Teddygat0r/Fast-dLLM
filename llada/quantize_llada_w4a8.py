@@ -73,10 +73,18 @@ if __name__ == "__main__":
                         help=f"Path to smoothed model weights (default: {SMOOTHED_WEIGHTS_PATH})")
     parser.add_argument("--calibration-samples", type=int, default=128,
                         help="Number of calibration samples (default: 128)")
-    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE,
-                        help=f"Batch size for calibration (default: {BATCH_SIZE})")
-    parser.add_argument("--save-path", type=str, default=None,
-                        help="Path to save quantized model (default: auto-generated)")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=BATCH_SIZE,
+        help=f"Batch size for calibration (default: {BATCH_SIZE})",
+    )
+    parser.add_argument(
+        "--save-dir",
+        type=str,
+        default=None,
+        help="Directory to save quantized model with Quanto (default: auto-generated)",
+    )
     parser.add_argument("--exclude-layers", type=str, nargs="+", default=QUANTIZATION_EXCLUDE,
                         help=f"Layers to exclude from quantization (default: {QUANTIZATION_EXCLUDE})")
     args = parser.parse_args()
@@ -98,14 +106,11 @@ if __name__ == "__main__":
     print(f"\n[Step 1/5] Loading model: {MODEL_NAME}...")
     torch.cuda.empty_cache()
     
-    config = AutoConfig.from_pretrained(MODEL_NAME, trust_remote_code=True)
-    config.flash_attention = True
     model = LLaDAModelLM.from_pretrained(
         MODEL_NAME,
         torch_dtype=torch.bfloat16,
         device_map=DEVICE,
-        trust_remote_code=True,
-        config=config
+        trust_remote_code=True
     )
     model.eval()
     print("  ✓ Model loaded")
@@ -179,39 +184,37 @@ if __name__ == "__main__":
     
     print("  ✓ Calibration complete")
     
-    # Step 5: Freeze and save
+    # Step 5: Freeze and save (using Quanto utilities)
     print(f"\n[Step 5/5] Freezing model to integer representation...")
     freeze(model)
     print("  ✓ Model frozen")
     
-    # Determine save path
-    if args.save_path:
-        save_path_full = args.save_path
-        save_path_state_dict = args.save_path.replace('.pt', '_state_dict.pt')
+    # Determine save directory for Quanto
+    if args.save_dir:
+        save_dir = args.save_dir
     else:
         base_name = "llada_quantized_w4a8"
         if args.load_smoothed:
             base_name += "_smoothquant"
-        save_path_full = f"models/{base_name}_full.pt"
-        save_path_state_dict = f"models/{base_name}.pt"
+        save_dir = os.path.join("models", base_name)
     
-    # Create models directory if it doesn't exist
-    os.makedirs(os.path.dirname(save_path_full) if os.path.dirname(save_path_full) else ".", exist_ok=True)
+    # Create directory if it doesn't exist
+    os.makedirs(save_dir, exist_ok=True)
     
-    print(f"\nSaving quantized model...")
-    print(f"  Full model: {save_path_full} (recommended for fast loading)")
-    torch.save(model, save_path_full)
-    print(f"  ✓ Full model saved")
-    
-    print(f"\n  State dict: {save_path_state_dict} (backwards compatible)")
-    torch.save(model.state_dict(), save_path_state_dict)
-    print(f"  ✓ State dict saved")
+    print(f"\nSaving quantized model with Quanto...")
+    print(f"  Save directory: {save_dir}")
+    # Save both model and tokenizer so the directory is self-contained
+    model.save_pretrained(save_dir, safe_serialization=True)
+    tokenizer.save_pretrained(save_dir)
+    print("  ✓ Quantized model and tokenizer saved with Quanto-compatible format")
     
     print_memory_usage("After Save")
     
     print("\n=== Quantization Complete ===")
-    print(f"Quantized model saved to:")
-    print(f"  - Full model: {save_path_full}")
-    print(f"  - State dict: {save_path_state_dict}")
-    print(f"\nTo use the quantized model, load it with:")
-    print(f"  model = torch.load('{save_path_full}', map_location='cuda', weights_only=False)")
+    print("Quantized model saved with Quanto utilities to:")
+    print(f"  - Directory: {save_dir}")
+    print("\nTo load the quantized model, use:")
+    print("  from transformers import AutoTokenizer")
+    print("  from model.modeling_llada import LLaDAModelLM")
+    print(f"  tokenizer = AutoTokenizer.from_pretrained('{save_dir}', trust_remote_code=True)")
+    print(f"  model = LLaDAModelLM.from_pretrained('{save_dir}', trust_remote_code=True, device_map='{DEVICE}')")
