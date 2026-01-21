@@ -11,19 +11,24 @@ class LLaDACalibrationDataset(Dataset):
     This dataset generates calibration samples with block masking for activation
     statistics collection. Unlike Fast-dLLM v2, LLaDA models don't use timesteps
     in the forward pass, so we only return input_ids.
+    
+    The dataset concatenates all text from wikitext-2 and randomly selects
+    contiguous blocks of tokens for calibration.
     """
     
     def __init__(self, 
                  tokenizer, 
                  seq_len=512, 
                  samples=128, 
-                 block_size=32):
+                 block_size=32,
+                 seed=42):
         """
         Args:
             tokenizer: The loaded model tokenizer.
             seq_len: Max sequence length.
             samples: Total number of calibration samples to generate.
             block_size: Block size for masking (usually 32).
+            seed: Random seed for reproducibility.
         """
         self.tokenizer = tokenizer
         self.seq_len = seq_len
@@ -41,45 +46,39 @@ class LLaDACalibrationDataset(Dataset):
             self.mask_token_id = 126336
             
         print(f"Building Calibration Buffer with Mask ID: {self.mask_token_id}...")
-
-        # Fill buffer
+        
+        # Concatenate all text from the dataset and tokenize once
+        print("Concatenating and tokenizing dataset...")
+        all_text = "\n\n".join(raw_data['text'])
+        encoded = tokenizer(all_text, return_tensors='pt')
+        all_input_ids = encoded.input_ids  # Shape: [1, total_tokens]
+        total_tokens = all_input_ids.shape[1]
+        print(f"Total tokens in concatenated dataset: {total_tokens}")
+        
+        # Set random seed for reproducibility
+        random.seed(seed)
+        
+        # Fill buffer by randomly selecting contiguous blocks
         # We pick (samples / len(target_ratios)) items for each ratio.
         # Ensure at least 1 sample per ratio so the buffer is never empty,
         # even when `samples` < len(target_ratios) (e.g., small batch tests).
         samples_per_ratio = max(1, samples // len(target_ratios))
         
-        iter_data = iter(raw_data)
-        
         for ratio in target_ratios:
-            count = 0
-            while count < samples_per_ratio:
-                try:
-                    entry = next(iter_data)
-                except StopIteration:
-                    iter_data = iter(raw_data)  # Restart dataset if needed
-                    entry = next(iter_data)
-
-                text = entry['text']
-                if len(text) < 50: 
-                    continue
-
-                # Tokenize
-                tokens = self.tokenizer(
-                    text, 
-                    max_length=seq_len, 
-                    truncation=True, 
-                    padding="max_length", 
-                    return_tensors="pt"
-                )
-                input_ids = tokens.input_ids[0]  # remove batch dim
-
+            for _ in range(samples_per_ratio):
+                # Randomly select a starting position
+                i = random.randint(0, total_tokens - seq_len - 1)
+                j = i + seq_len
+                
+                # Extract the contiguous block of tokens
+                input_ids = all_input_ids[0, i:j].clone()
+                
                 # Apply Block Masking
                 masked_ids = self.apply_block_masking(input_ids, ratio)
                 
                 self.buffer.append({
                     "input_ids": masked_ids
                 })
-                count += 1
         
         # Shuffle so the quantizer doesn't adapt to one noise level at a time
         random.shuffle(self.buffer)

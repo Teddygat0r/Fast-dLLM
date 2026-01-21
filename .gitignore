@@ -9,3 +9,4 @@ dream/evals_results/
 **/.DS_Store
 v2/.gradio/certificate.pem
 v2/.agent/rules/code-python-environment.md
+instruct.md

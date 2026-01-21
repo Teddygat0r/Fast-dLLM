@@ -14,12 +14,12 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 import os
 import argparse
-from model.modeling_llada import LLaDAModelLM, LLaDASequentialBlock, LLaDALlamaBlock
+from model.modeling_llada import LLaDAModelLM, LLaDALlamaBlock
 from quantization_calibration_dataset import LLaDACalibrationDataset
 
 # Configuration
 MODEL_NAME = "GSAI-ML/LLaDA-8B-Instruct"
-BATCH_SIZE = 32
+BATCH_SIZE = 1
 ALPHA = 0.5  # SmoothQuant migration strength (lower = less aggressive, 0.3 is more conservative)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SAVE_DIR = "models"
@@ -76,240 +76,124 @@ def get_layers(model):
         raise ValueError("Could not find blocks or block_groups in model structure")
 
 
-def fuse_smoothquant_llada(model, capture_stats, alpha=0.3, device="cuda"):
-    """
-    Apply SmoothQuant weight preprocessing to the LLaDA model.
+def fuse_smoothquant_llada(model, capture_stats, alpha=0.5, device="cuda"):
+    # alpha=0.5 is usually preferred for SmoothQuant on LLaMA to balance migration
     
-    Migrates quantization difficulty from activations to weights by:
-    1. Dividing LayerNorm weights by scale s
-    2. Multiplying subsequent Linear weights by scale s
+    layers = get_layers(model) # Ensure this retrieves the block list
+    module_to_name = {m: n for n, m in model.named_modules()}
     
-    Scale s = act_max^alpha / weight_max^(1-alpha)
-    
-    Uses per-tensor scaling (mean of per-channel scales) for stability.
-    Lower alpha (default 0.3) is more conservative and preserves model quality better.
-    """
-    layers = get_layers(model)
-    scale_stats = {
-        'attn_scales': [],
-        'mlp_scales': []
-    }
-    
-    # Build a mapping from layer index to actual module path names
-    layer_name_map = {}
-    for name, module in model.named_modules():
-        if isinstance(module, (LLaDASequentialBlock, LLaDALlamaBlock)):
-            # Extract layer index from name
-            # Names can be like "model.transformer.blocks.0" or "model.transformer.block_groups.0.0"
-            parts = name.split('.')
-            if 'blocks' in parts:
-                idx = parts.index('blocks')
-                if idx + 1 < len(parts):
-                    try:
-                        layer_idx = int(parts[idx + 1])
-                        layer_name_map[layer_idx] = name
-                    except ValueError:
-                        pass
-            elif 'block_groups' in parts:
-                idx = parts.index('block_groups')
-                if idx + 2 < len(parts):
-                    try:
-                        group_idx = int(parts[idx + 1])
-                        block_idx = int(parts[idx + 2])
-                        # Calculate global layer index
-                        # Access config through model.config (LLaDAConfig) which has block_group_size
-                        # We need to get it from the actual model config
-                        transformer = model.model.transformer
-                        if hasattr(transformer, 'block_groups') and len(transformer.block_groups) > 0:
-                            # Get block_group_size from the first group's config
-                            block_group_size = transformer.block_groups[0].config.block_group_size
-                        else:
-                            block_group_size = 1  # Default
-                        layer_idx = group_idx * block_group_size + block_idx
-                        layer_name_map[layer_idx] = name
-                    except (ValueError, AttributeError):
-                        pass
+    print(f"Applying SmoothQuant with alpha={alpha}...")
     
     for i, block in enumerate(layers):
-        # Detect block type
-        is_sequential = isinstance(block, LLaDASequentialBlock)
-        is_llama = isinstance(block, LLaDALlamaBlock)
-        
-        if not (is_sequential or is_llama):
-            print(f"WARNING: Unknown block type at layer {i}, skipping SmoothQuant")
+        if not isinstance(block, LLaDALlamaBlock):
             continue
-        
-        # Get base name for this layer
-        base_name = layer_name_map.get(i, f"model.transformer.blocks.{i}")
-        
-        # === Attention block smoothing ===
-        if is_sequential:
-            # LLaDASequentialBlock uses fused att_proj
-            att_proj_name = f"{base_name}.att_proj"
             
-            if att_proj_name not in capture_stats:
-                print(f"WARNING: Could not find activation stats for att_proj in layer {i} (tried {att_proj_name})")
+        block_name = module_to_name[block]
+        
+        # =====================================================
+        # 1. Attention Block (Q, K, V share input from attn_norm)
+        # =====================================================
+        q_name = f"{block_name}.q_proj"
+        
+        # Check if we have stats
+        if q_name in capture_stats:
+            # Load stats (activation max per channel)
+            act_max = capture_stats[q_name].to(device)
+            
+            # Combine weights to find max scale requirement across Q, K, V
+            # We calculate scale per input-channel (dim 1 of weights, dim 0 here if transposed)
+            # Standard Linear weight shape: [out_features, in_features]
+            # We want max over out_features (dim 0) -> resulting shape [in_features]
+            w_q = block.q_proj.weight.abs().max(dim=0).values
+            w_k = block.k_proj.weight.abs().max(dim=0).values
+            w_v = block.v_proj.weight.abs().max(dim=0).values
+            w_max = torch.max(torch.max(w_q, w_k), w_v)
+            
+            # STRICT SHAPE CHECK: Do not use slicing here. 
+            # If these don't match, your stats collection or model def is wrong.
+            assert act_max.shape == w_max.shape, \
+                f"Shape mismatch in Attn Layer {i}: Act {act_max.shape} vs W {w_max.shape}"
+
+            # Calculate Scale
+            act_max = torch.clamp(act_max, min=1e-5)
+            w_max = torch.clamp(w_max, min=1e-5)
+            
+            scales = act_max.pow(alpha) / w_max.pow(1 - alpha)
+            scales = torch.clamp(scales, min=1e-3, max=6.0) # Widen clamp slightly or stick to 0.1-10
+
+            # Apply Smoothing
+            with torch.no_grad():
+                # 1. Scale Input (Norm) DOWN
+                block.attn_norm.weight.div_(scales)
+                if hasattr(block.attn_norm, 'bias') and block.attn_norm.bias is not None:
+                    block.attn_norm.bias.div_(scales)
+                
+                # 2. Scale Weights (Q, K, V) UP
+                # Reshape for broadcasting: [1, in_features]
+                scales_view = scales.view(1, -1)
+                
+                block.q_proj.weight.mul_(scales_view)
+                block.k_proj.weight.mul_(scales_view)
+                block.v_proj.weight.mul_(scales_view)
+
+        ff_proj_key = f"{block_name}.ff_proj"
+        up_proj_key = f"{block_name}.up_proj"
+        
+        print(" ------------------------------------------------------------")
+        print(f"  Layer {i}: Attention Block Scales Mean: {scales.mean():.4f}, Std: {scales.std():.4f}, Max: {scales.max():.4f}, Min: {scales.min():.4f}")
+        print(f"  Layer {i}: Act Max: {act_max.mean():.4f}, W Max: {w_max.mean():.4f}")
+        # We only care about stats for the *inputs* to the MLP, which creates keys
+        # for ff_proj or up_proj. They share the same input (ff_norm output).
+        if ff_proj_key in capture_stats or up_proj_key in capture_stats:
+            
+            # 1. Get Activation Max (Input to MLP)
+            if ff_proj_key in capture_stats:
+                act_max = capture_stats[ff_proj_key].to(device)
+            else:
+                act_max = capture_stats[up_proj_key].to(device)
+            
+            # Robustness: if both exist, take the max of both to be safe
+            if ff_proj_key in capture_stats and up_proj_key in capture_stats:
+                act_max = torch.max(act_max, capture_stats[up_proj_key].to(device))
+            
+            # 2. Get Weight Max (Combine BOTH expansion layers)
+            # We must look at the "difficulty" of quantizing both matrices
+            w_ff = block.ff_proj.weight.abs().max(dim=0).values
+            w_up = block.up_proj.weight.abs().max(dim=0).values
+            w_max = torch.max(w_ff, w_up)
+            
+            # 3. Calculate Scale
+            # Shape check: act_max and w_max must both be size [4096]
+            if act_max.shape != w_max.shape:
+                # This should theoretically not happen given your logs, 
+                # but good to keep for safety against bad stats collection.
+                print(f"WARNING: Shape mismatch in layer {i}. Skipping MLP smoothing.")
                 continue
-            
-            # Get activation max from fused att_proj
-            attn_activation_max = capture_stats[att_proj_name].to(device)
-            
-            # Get weight max from att_proj (fused QKV)
-            # att_proj shape: [out_features, in_features] where out_features = Q_dim + K_dim + V_dim
-            att_proj_weight = block.att_proj.weight
-            # Split into Q, K, V dimensions
-            # Access config from the block's config
-            config = block.config
-            head_dim = config.d_model // config.n_heads
-            q_dim = config.d_model
-            k_dim = config.effective_n_kv_heads * head_dim
-            v_dim = config.effective_n_kv_heads * head_dim
-            
-            w_q_max = att_proj_weight[:q_dim].abs().max(dim=0).values
-            w_k_max = att_proj_weight[q_dim:q_dim+k_dim].abs().max(dim=0).values
-            w_v_max = att_proj_weight[q_dim+k_dim:q_dim+k_dim+v_dim].abs().max(dim=0).values
-            w_max = torch.max(torch.max(w_q_max, w_k_max), w_v_max)
-            
-        else:  # is_llama
-            # LLaDALlamaBlock uses separate q_proj, k_proj, v_proj
-            q_proj_name = f"{base_name}.q_proj"
-            k_proj_name = f"{base_name}.k_proj"
-            v_proj_name = f"{base_name}.v_proj"
-            
-            if q_proj_name not in capture_stats or k_proj_name not in capture_stats or v_proj_name not in capture_stats:
-                print(f"WARNING: Could not find activation stats for Q/K/V in layer {i} (tried {q_proj_name}, {k_proj_name}, {v_proj_name})")
-                continue
-            
-            # Get combined activation max across Q, K, V
-            attn_activation_max = capture_stats[q_proj_name].to(device)
-            attn_activation_max = torch.max(attn_activation_max, capture_stats[k_proj_name].to(device))
-            attn_activation_max = torch.max(attn_activation_max, capture_stats[v_proj_name].to(device))
 
-            # Get combined weight max across Q, K, V
-            w_q_max = block.q_proj.weight.abs().max(dim=0).values
-            w_k_max = block.k_proj.weight.abs().max(dim=0).values
-            w_v_max = block.v_proj.weight.abs().max(dim=0).values
-            w_max = torch.max(torch.max(w_q_max, w_k_max), w_v_max)
-        
-        # Ensure shapes match
-        if attn_activation_max.shape != w_max.shape:
-            print(f"WARNING: Shape mismatch in layer {i}: activation_max {attn_activation_max.shape} != weight_max {w_max.shape}")
-            min_len = min(attn_activation_max.shape[0], w_max.shape[0])
-            attn_activation_max = attn_activation_max[:min_len]
-            w_max = w_max[:min_len]
-        
-        # Clamp to avoid division by zero
-        attn_activation_max = torch.clamp(attn_activation_max, min=1e-5)
-        w_max = torch.clamp(w_max, min=1e-5)
-
-        # Compute smoothing scale (per-channel)
-        s_attn_per_channel = attn_activation_max.pow(alpha) / w_max.pow(1 - alpha)
-        # Clip per-channel scales to prevent extreme values
-        s_attn_per_channel = torch.clamp(s_attn_per_channel, min=0.1, max=10.0)
-        
-        # Use per-tensor scale (mean of per-channel) for more stable behavior
-        s_attn_scalar = s_attn_per_channel.mean().item()
-        s_attn = torch.full_like(s_attn_per_channel, s_attn_scalar)
-        scale_stats['attn_scales'].append(s_attn.cpu())
-
-        # Apply smoothing: divide LayerNorm, multiply Linear weights
-        with torch.no_grad():
-            # Scale LayerNorm weights and bias down by s
-            block.attn_norm.weight.div_(s_attn)
-            if hasattr(block.attn_norm, 'bias') and block.attn_norm.bias is not None:
-                block.attn_norm.bias.div_(s_attn)
+            act_max = torch.clamp(act_max, min=1e-5)
+            w_max = torch.clamp(w_max, min=1e-5)
             
-            # Scale attention projection weights up by s to compensate for scaled LayerNorm output
-            s_attn_broadcast = s_attn.view(1, -1)
-            if is_sequential:
-                if s_attn_broadcast.shape[1] != block.att_proj.weight.shape[1]:
-                    print(f"WARNING: Using scalar scale for att_proj in layer {i} due to shape mismatch")
-                    s_attn_broadcast = s_attn_scalar
-                block.att_proj.weight.mul_(s_attn_broadcast)
-            else:  # is_llama
-                if s_attn_broadcast.shape[1] != block.q_proj.weight.shape[1]:
-                    print(f"WARNING: Using scalar scale for Q/K/V in layer {i} due to shape mismatch")
-                    s_attn_broadcast = s_attn_scalar
-                block.q_proj.weight.mul_(s_attn_broadcast)
-                block.k_proj.weight.mul_(s_attn_broadcast)
-                block.v_proj.weight.mul_(s_attn_broadcast)
-        
-        # DON'T scale attn_out - the attention computation is already at original scale
-        # after the Q/K/V scaling cancels out the LayerNorm scaling
-        # The residual connection will work correctly: x_new = x + attn_out (both at original scale)
-        
-        # === MLP block smoothing ===
-        ff_proj_name = f"{base_name}.ff_proj"
-        up_proj_name = f"{base_name}.up_proj"
-        
-        if ff_proj_name not in capture_stats or up_proj_name not in capture_stats:
-            print(f"WARNING: Could not find activation stats for ff_proj/up_proj in layer {i} (tried {ff_proj_name}, {up_proj_name})")
-            continue
-        
-        # Get combined activation max across ff_proj and up_proj
-        mlp_activation_max = capture_stats[ff_proj_name].to(device)
-        mlp_activation_max = torch.max(mlp_activation_max, capture_stats[up_proj_name].to(device))
-        
-        # Get combined weight max
-        w_ff_max = block.ff_proj.weight.abs().max(dim=0).values
-        w_up_max = block.up_proj.weight.abs().max(dim=0).values
-        w_max = torch.max(w_ff_max, w_up_max)
+            s_mlp = act_max.pow(alpha) / w_max.pow(1 - alpha)
+            s_mlp = torch.clamp(s_mlp, min=1e-3, max=6.0)
 
-        # Ensure shapes match
-        if mlp_activation_max.shape != w_max.shape:
-            print(f"WARNING: Shape mismatch in MLP layer {i}: activation_max {mlp_activation_max.shape} != weight_max {w_max.shape}")
-            min_len = min(mlp_activation_max.shape[0], w_max.shape[0])
-            mlp_activation_max = mlp_activation_max[:min_len]
-            w_max = w_max[:min_len]
+            # 4. Apply Transformation
+            with torch.no_grad():
+                # A. Scale the Norm DOWN
+                block.ff_norm.weight.div_(s_mlp)
+                if hasattr(block.ff_norm, 'bias') and block.ff_norm.bias is not None:
+                    block.ff_norm.bias.div_(s_mlp)
 
-        # Clamp to avoid division by zero
-        mlp_activation_max = torch.clamp(mlp_activation_max, min=1e-5)
-        w_max = torch.clamp(w_max, min=1e-5)
-
-        # Compute smoothing scale (per-channel)
-        s_mlp_per_channel = mlp_activation_max.pow(alpha) / w_max.pow(1 - alpha)
-        # Clip per-channel scales to prevent extreme values
-        s_mlp_per_channel = torch.clamp(s_mlp_per_channel, min=0.1, max=10.0)
-        
-        # Use per-tensor scale (mean of per-channel) for more stable behavior
-        s_mlp_scalar = s_mlp_per_channel.mean().item()
-        s_mlp = torch.full_like(s_mlp_per_channel, s_mlp_scalar)
-        scale_stats['mlp_scales'].append(s_mlp.cpu())
-
-        # Apply smoothing: same logic as attention block
-        with torch.no_grad():
-            # Scale LayerNorm weights and bias down by s
-            block.ff_norm.weight.div_(s_mlp)
-            if hasattr(block.ff_norm, 'bias') and block.ff_norm.bias is not None:
-                block.ff_norm.bias.div_(s_mlp)
-            
-            # Scale ff_proj/up_proj weights up by s to compensate for scaled LayerNorm output
-            s_mlp_broadcast = s_mlp.view(1, -1)
-            if s_mlp_broadcast.shape[1] != block.ff_proj.weight.shape[1]:
-                print(f"WARNING: Using scalar scale for ff_proj/up_proj in layer {i} due to shape mismatch")
-                s_mlp_broadcast = s_mlp_scalar
-            block.ff_proj.weight.mul_(s_mlp_broadcast)
-            block.up_proj.weight.mul_(s_mlp_broadcast)
-        
-        # DON'T scale ff_out - the MLP computation is already at original scale
-        # after the ff_proj/up_proj scaling cancels out the LayerNorm scaling
-        # The residual connection will work correctly: x_new = x + mlp_out (both at original scale)
-        
-        if (i + 1) % 4 == 0 or i == len(layers) - 1:
-            print(f"  Smoothed layers 1-{i+1}/{len(layers)}")
-    
-    # Log scale statistics
-    if scale_stats['attn_scales']:
-        all_attn_scales = torch.cat([s.flatten() for s in scale_stats['attn_scales']])
-        all_mlp_scales = torch.cat([s.flatten() for s in scale_stats['mlp_scales']])
-        print(f"\n  Scale Statistics:")
-        print(f"    Attention scales - Mean: {all_attn_scales.mean():.4f}, Std: {all_attn_scales.std():.4f}, "
-              f"Min: {all_attn_scales.min():.4f}, Max: {all_attn_scales.max():.4f}")
-        print(f"    MLP scales - Mean: {all_mlp_scales.mean():.4f}, Std: {all_mlp_scales.std():.4f}, "
-              f"Min: {all_mlp_scales.min():.4f}, Max: {all_mlp_scales.max():.4f}")
-    
+                # B. Scale BOTH Projections UP
+                s_broadcast = s_mlp.view(1, -1)
+                
+                block.ff_proj.weight.mul_(s_broadcast)
+                block.up_proj.weight.mul_(s_broadcast)
+            print(f"  Layer {i}: Smoothed MLP (Mean Scale: {s_mlp.mean():.4f})")
+            print(f"  Layer {i}: STDEV smoothed scale {s_mlp.std():.4f}")
+            print(f"  Layer {i}: Max smoothed scale {s_mlp.max():.4f}, Min smoothed scale {s_mlp.min():.4f}")
+            print(f"  Layer {i}: Act Max: {act_max.mean():.4f}, W Max: {w_max.mean():.4f}")
+                        
     return model
-
 
 # === Main execution ===
 if __name__ == "__main__":
