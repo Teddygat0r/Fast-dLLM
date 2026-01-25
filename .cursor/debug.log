@@ -1,0 +1,2 @@
+{"sessionId": "debug-session", "runId": "run1", "hypothesisId": "H4", "location": "generate.py:117", "message": "Forward pass", "data": {"nfe": 191, "forward_time_ms": 388.6096477508545, "batch_size": 1, "seq_len": 1036}, "timestamp": 1769313571439.0967}
+{"sessionId": "debug-session", "runId": "run1", "hypothesisId": "H4", "location": "generate.py:117", "message": "Forward pass", "data": {"nfe": 201, "forward_time_ms": 389.82605934143066, "batch_size": 1, "seq_len": 1036}, "timestamp": 1769313576989.0278}

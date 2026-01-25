@@ -40,6 +40,9 @@ num_fewshot=5
 batch_size=1
 model_path="GSAI-ML/LLaDA-8B-Instruct"
 
+# Prefix cache setting
+use_prefix_cache=true
+
 # SmoothQuant pipeline parameters
 smoothquant_alpha=0.5
 smoothquant_w_bits=8
@@ -65,6 +68,7 @@ usage() {
   echo "  --alpha FLOAT                # SmoothQuant alpha (default: 0.5)"
   echo "  --calibration-samples N      # calibration samples (default: 64)"
   echo "  --scales-path PATH           # path to save/load activation scales"
+  echo "  --no-prefix-cache            # disable prefix cache (use_cache=False)"
   echo "  -h, --help                   # show this help"
   exit 1
 }
@@ -119,6 +123,10 @@ while [[ $# -gt 0 ]]; do
       smoothquant_scales_path="$2"
       shift 2
       ;;
+    --no-prefix-cache)
+      use_prefix_cache=false
+      shift
+      ;;
     -h|--help)
       usage
       ;;
@@ -152,7 +160,7 @@ LOG_FILE="${LOG_DIR}/gsm8k_smoothquant_pipeline_${TIMESTAMP}.log"
   echo "Batch size:        ${batch_size}"
   echo "Num few-shot:      ${num_fewshot}"
   echo "Limit:             ${limit:-'full dataset'}"
-  echo "Prefix cache:      use_cache=True"
+  echo "Prefix cache:      use_cache=${use_prefix_cache^}"
   echo "Show speed:        show_speed=True"
   echo ""
   echo "SmoothQuant Pipeline Config:"
@@ -175,7 +183,7 @@ LOG_FILE="${LOG_DIR}/gsm8k_smoothquant_pipeline_${TIMESTAMP}.log"
       --batch_size "${batch_size}" \
       --confirm_run_unsafe_code \
       --model llada_dist \
-      --model_args "model_path=${model_path},gen_length=${length},steps=${length},block_length=${block_length},use_cache=True,show_speed=True"
+      --model_args "model_path=${model_path},gen_length=${length},steps=${length},block_length=${block_length},use_cache=${use_prefix_cache^},show_speed=True"
     echo ""
   else
     echo "Skipping base model benchmark (per arguments)."
@@ -192,7 +200,7 @@ LOG_FILE="${LOG_DIR}/gsm8k_smoothquant_pipeline_${TIMESTAMP}.log"
       --batch_size "${batch_size}" \
       --confirm_run_unsafe_code \
       --model llada_dist \
-      --model_args "model_path=${model_path},gen_length=${length},steps=${length},block_length=${block_length},use_cache=True,show_speed=True,use_smoothquant_pipeline=True,smoothquant_alpha=${smoothquant_alpha},smoothquant_w_bits=${smoothquant_w_bits},smoothquant_a_bits=${smoothquant_a_bits},smoothquant_calibration_samples=${smoothquant_calibration_samples},smoothquant_scales_path=${smoothquant_scales_path}"
+      --model_args "model_path=${model_path},gen_length=${length},steps=${length},block_length=${block_length},use_cache=${use_prefix_cache^},show_speed=True,use_smoothquant_pipeline=True,smoothquant_alpha=${smoothquant_alpha},smoothquant_w_bits=${smoothquant_w_bits},smoothquant_a_bits=${smoothquant_a_bits},smoothquant_calibration_samples=${smoothquant_calibration_samples},smoothquant_scales_path=${smoothquant_scales_path}"
     echo ""
   else
     echo "Skipping SmoothQuant pipeline benchmark (per arguments)."
@@ -209,7 +217,7 @@ LOG_FILE="${LOG_DIR}/gsm8k_smoothquant_pipeline_${TIMESTAMP}.log"
       --batch_size "${batch_size}" \
       --confirm_run_unsafe_code \
       --model llada_dist \
-      --model_args "model_path=${model_path},gen_length=${length},steps=${length},block_length=${block_length},use_cache=True,show_speed=True,use_smoothquant_pipeline=True,smoothquant_alpha=${smoothquant_alpha},smoothquant_calibration_samples=${smoothquant_calibration_samples},smoothquant_scales_path=${smoothquant_scales_path},smoothquant_skip_quantization=True"
+      --model_args "model_path=${model_path},gen_length=${length},steps=${length},block_length=${block_length},use_cache=${use_prefix_cache^},show_speed=True,use_smoothquant_pipeline=True,smoothquant_alpha=${smoothquant_alpha},smoothquant_calibration_samples=${smoothquant_calibration_samples},smoothquant_scales_path=${smoothquant_scales_path},smoothquant_skip_quantization=True"
     echo ""
   else
     echo "Skipping smooth-only benchmark (per arguments)."
