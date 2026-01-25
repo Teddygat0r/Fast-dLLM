@@ -10,3 +10,4 @@ dream/evals_results/
 v2/.gradio/certificate.pem
 v2/.agent/rules/code-python-environment.md
 instruct.md
+.cursor/debug.log
