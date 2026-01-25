@@ -37,6 +37,13 @@ from generate import generate, generate_with_prefix_cache, generate_with_dual_ca
 from model.modeling_llada import LLaDAModelLM
 import json
 import time
+
+# Import smoothquant pipeline (optional - only needed if using smoothquant)
+try:
+    from smoothquant import apply_smoothquant_pipeline
+    SMOOTHQUANT_AVAILABLE = True
+except ImportError:
+    SMOOTHQUANT_AVAILABLE = False
 # #region agent log
 DEBUG_LOG_PATH = "/home/joshuaz/dllm/Fast-dLLM/.cursor/debug.log"
 def _debug_log(session_id, run_id, hypothesis_id, location, message, data):
@@ -77,6 +84,14 @@ class LLaDAEvalHarness(LM):
         dual_cache=False,
         smoothed_model_path=None,
         quantized_model_path=None,
+        # SmoothQuant pipeline parameters (from smoothquant folder)
+        use_smoothquant_pipeline=False,
+        smoothquant_alpha=0.5,
+        smoothquant_w_bits=8,
+        smoothquant_a_bits=8,
+        smoothquant_calibration_samples=64,
+        smoothquant_scales_path=None,
+        smoothquant_skip_quantization=False,
         **kwargs,
     ):
         '''
@@ -95,6 +110,15 @@ class LLaDAEvalHarness(LM):
                              we recommend setting is_check_greedy to False. This configuration causes suffix_greedy_prediction() to return False 
                              by default, significantly accelerating the evaluation process.
             cfg_scale: Unsupervised classifier-free guidance scale.
+            
+            SmoothQuant Pipeline Parameters (uses smoothquant folder with QuantLinear layers):
+            use_smoothquant_pipeline: If True, use the full SmoothQuant pipeline with QuantLinear layers.
+            smoothquant_alpha: SmoothQuant migration strength (0.0-1.0, default 0.5).
+            smoothquant_w_bits: Weight quantization bits (default 8).
+            smoothquant_a_bits: Activation quantization bits (default 8).
+            smoothquant_calibration_samples: Number of calibration samples (default 64).
+            smoothquant_scales_path: Path to load/save pre-computed activation scales.
+            smoothquant_skip_quantization: If True, only apply smoothing without quantization.
         '''
         super().__init__()
 
@@ -110,9 +134,65 @@ class LLaDAEvalHarness(LM):
         
         # Track which path should be used for the tokenizer (may differ for quantized models)
         tokenizer_model_path = model_path
+        
+        # Convert string 'True'/'False' to boolean for use_smoothquant_pipeline
+        if isinstance(use_smoothquant_pipeline, str):
+            use_smoothquant_pipeline = use_smoothquant_pipeline.lower() == 'true'
+        if isinstance(smoothquant_skip_quantization, str):
+            smoothquant_skip_quantization = smoothquant_skip_quantization.lower() == 'true'
 
-        # Load quantized model if provided (takes precedence)
-        if quantized_model_path is not None and quantized_model_path != '':
+        # Use SmoothQuant pipeline from smoothquant folder (with QuantLinear layers)
+        if use_smoothquant_pipeline:
+            if not SMOOTHQUANT_AVAILABLE:
+                raise ImportError(
+                    "SmoothQuant pipeline requested but smoothquant module not found. "
+                    "Make sure the smoothquant folder is in the llada directory."
+                )
+            
+            print(f"\n{'='*60}")
+            print("Loading model with SmoothQuant Pipeline (QuantLinear layers)")
+            print(f"{'='*60}")
+            print(f"  Alpha: {smoothquant_alpha}")
+            print(f"  Quantization: W{smoothquant_w_bits}A{smoothquant_a_bits}")
+            print(f"  Calibration samples: {smoothquant_calibration_samples}")
+            print(f"  Scales path: {smoothquant_scales_path}")
+            print(f"  Skip quantization: {smoothquant_skip_quantization}")
+            
+            # Determine device for smoothquant pipeline
+            sq_device = f'{self.accelerator.device}' if self.accelerator is not None else device
+            
+            # Check if scales file exists for loading
+            load_scales = None
+            save_scales = None
+            if smoothquant_scales_path:
+                if os.path.exists(smoothquant_scales_path):
+                    load_scales = smoothquant_scales_path
+                    print(f"  Loading pre-computed scales from: {smoothquant_scales_path}")
+                else:
+                    save_scales = smoothquant_scales_path
+                    print(f"  Will save scales to: {smoothquant_scales_path}")
+            
+            self.model, _ = apply_smoothquant_pipeline(
+                model_path=model_path,
+                calibration_samples=int(smoothquant_calibration_samples),
+                alpha=float(smoothquant_alpha),
+                w_bits=int(smoothquant_w_bits),
+                a_bits=int(smoothquant_a_bits),
+                seq_len=512,
+                batch_size=1,
+                device=sq_device,
+                save_scales_path=save_scales,
+                load_scales_path=load_scales,
+                skip_quantization=smoothquant_skip_quantization,
+            )
+            
+            # Skip the other loading paths
+            quantized_model_path = None
+            smoothed_model_path = None
+            print("✓ SmoothQuant pipeline model loaded with QuantLinear layers")
+
+        # Load quantized model if provided (takes precedence, unless smoothquant pipeline was used)
+        if not use_smoothquant_pipeline and quantized_model_path is not None and quantized_model_path != '':
             if os.path.exists(quantized_model_path):
                 # New path: quantized model saved via `save_pretrained` (directory with config + weights)
                 if os.path.isdir(quantized_model_path):
@@ -149,8 +229,8 @@ class LLaDAEvalHarness(LM):
                 print("Falling back to loading base model...")
                 quantized_model_path = None  # Fall through to normal loading
         
-        # Load base model if not using quantized model
-        if quantized_model_path is None or quantized_model_path == '':
+        # Load base model if not using quantized model or smoothquant pipeline
+        if not use_smoothquant_pipeline and (quantized_model_path is None or quantized_model_path == ''):
             self.model = LLaDAModelLM.from_pretrained(model_path, trust_remote_code=True, torch_dtype=torch.bfloat16, **model_kwargs)
             
             # Load smoothed model weights if provided

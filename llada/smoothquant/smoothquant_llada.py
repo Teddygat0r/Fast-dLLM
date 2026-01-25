@@ -193,6 +193,10 @@ def replace_with_quant_linear(
     return replaced
 
 
+# Default layers to skip during quantization (sensitive to quantization error)
+DEFAULT_SKIP_LAYERS = ["lm_head"]
+
+
 def apply_smoothquant_pipeline(
     model_path: str,
     calibration_samples: int = 128,
@@ -205,6 +209,7 @@ def apply_smoothquant_pipeline(
     save_scales_path: Optional[str] = None,
     load_scales_path: Optional[str] = None,
     skip_quantization: bool = False,
+    skip_layers: Optional[list] = None,
 ) -> Tuple[nn.Module, Dict[str, torch.Tensor]]:
     """
     Apply the complete SmoothQuant pipeline to a LLaDA model.
@@ -227,6 +232,10 @@ def apply_smoothquant_pipeline(
         save_scales_path: Path to save activation scales (optional).
         load_scales_path: Path to load pre-computed activation scales (optional).
         skip_quantization: If True, skip the quantization step (only smooth).
+        skip_layers: List of layer name patterns to skip during quantization.
+                    If None, defaults to DEFAULT_SKIP_LAYERS (["lm_head"]).
+                    The lm_head is typically kept in full precision as it is
+                    particularly sensitive to quantization error.
     
     Returns:
         Tuple of (model, act_scales).
@@ -308,7 +317,11 @@ def apply_smoothquant_pipeline(
     # Step 4: Replace with quantized layers
     if not skip_quantization:
         print(f"\n[Step 4/4] Replacing with quantized layers...")
-        replace_with_quant_linear(model, w_bits=w_bits, a_bits=a_bits)
+        # Use default skip layers if none provided
+        layers_to_skip = skip_layers if skip_layers is not None else DEFAULT_SKIP_LAYERS
+        if layers_to_skip:
+            print(f"  Skipping layers matching: {layers_to_skip}")
+        replace_with_quant_linear(model, w_bits=w_bits, a_bits=a_bits, skip_layers=layers_to_skip)
     else:
         print(f"\n[Step 4/4] Skipping quantization (skip_quantization=True)")
     
@@ -348,6 +361,10 @@ if __name__ == "__main__":
                         help="Path to save the quantized model state dict")
     parser.add_argument("--skip-quantization", action="store_true",
                         help="Skip quantization step (only apply smoothing)")
+    parser.add_argument("--skip-layers", type=str, nargs="*", default=None,
+                        help="Layer name patterns to skip during quantization. "
+                             "If not specified, defaults to ['lm_head']. "
+                             "Use --skip-layers (with no args) to skip nothing.")
     
     args = parser.parse_args()
     
@@ -363,6 +380,7 @@ if __name__ == "__main__":
         save_scales_path=args.save_scales,
         load_scales_path=args.load_scales,
         skip_quantization=args.skip_quantization,
+        skip_layers=args.skip_layers,
     )
     
     if args.save_model:
