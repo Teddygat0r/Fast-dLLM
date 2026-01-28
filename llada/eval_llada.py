@@ -44,6 +44,13 @@ try:
     SMOOTHQUANT_AVAILABLE = True
 except ImportError:
     SMOOTHQUANT_AVAILABLE = False
+
+try:
+    from duquant import apply_duquant_pipeline
+    DUQUANT_AVAILABLE = True
+except ImportError:
+    DUQUANT_AVAILABLE = False
+
 # #region agent log
 DEBUG_LOG_PATH = "/home/joshuaz/dllm/Fast-dLLM/.cursor/debug.log"
 def _debug_log(session_id, run_id, hypothesis_id, location, message, data):
@@ -92,6 +99,15 @@ class LLaDAEvalHarness(LM):
         smoothquant_calibration_samples=64,
         smoothquant_scales_path=None,
         smoothquant_skip_quantization=False,
+        use_duquant_pipeline=False,
+        duquant_n_bits=8,
+        duquant_block_size=128,
+        duquant_max_rotation_step=256,
+        duquant_permutation_times=1,
+        duquant_a_bits=8,
+        duquant_seq_len=512,
+        duquant_batch_size=1,
+        duquant_calibration_samples=128,
         **kwargs,
     ):
         '''
@@ -191,8 +207,48 @@ class LLaDAEvalHarness(LM):
             smoothed_model_path = None
             print("✓ SmoothQuant pipeline model loaded with QuantLinear layers")
 
+        if use_duquant_pipeline:
+            if not DUQUANT_AVAILABLE:
+                raise ImportError(
+                    "DuQuant pipeline requested but duquant module not found. "
+                    "Make sure the duquant folder is in the llada directory."
+                )
+
+            print(f"\n{'='*60}")
+            print("Loading model with DuQuant Pipeline")
+            print(f"  Weight bits: {duquant_n_bits}")
+            print(f"  Activation bits: {duquant_a_bits}")
+            print(f"  Block size: {duquant_block_size}")
+            print(f"  Max rotation steps: {duquant_max_rotation_step}")
+            print(f"  Permutation times: {duquant_permutation_times}")
+            print(f"  Calibration samples: {duquant_calibration_samples}")
+            print(f"  Sequence length: {duquant_seq_len}")
+            print(f"  Batch size: {duquant_batch_size}")
+            
+            # Determine device for duquant pipeline
+            dq_device = f'{self.accelerator.device}' if self.accelerator is not None else device
+            
+            self.model, _ = apply_duquant_pipeline(
+                model_path=model_path,
+                calibration_samples=int(duquant_calibration_samples),
+                n_bits=int(duquant_n_bits),
+                a_bits=int(duquant_a_bits),
+                block_size=int(duquant_block_size),
+                max_rotation_step=int(duquant_max_rotation_step),
+                permutation_times=int(duquant_permutation_times),
+                seq_len=int(duquant_seq_len),
+                batch_size=int(duquant_batch_size),
+                device=dq_device,
+                skip_layers=["lm_head"],
+            )
+
+            #skip the other loading paths
+            quantized_model_path = None
+            smoothed_model_path = None
+            print("✓ DuQuant pipeline model loaded")
+
         # Load quantized model if provided (takes precedence, unless smoothquant pipeline was used)
-        if not use_smoothquant_pipeline and quantized_model_path is not None and quantized_model_path != '':
+        if not use_smoothquant_pipeline and not use_duquant_pipeline and quantized_model_path is not None and quantized_model_path != '':
             if os.path.exists(quantized_model_path):
                 # New path: quantized model saved via `save_pretrained` (directory with config + weights)
                 if os.path.isdir(quantized_model_path):
@@ -230,7 +286,7 @@ class LLaDAEvalHarness(LM):
                 quantized_model_path = None  # Fall through to normal loading
         
         # Load base model if not using quantized model or smoothquant pipeline
-        if not use_smoothquant_pipeline and (quantized_model_path is None or quantized_model_path == ''):
+        if not use_smoothquant_pipeline and not use_duquant_pipeline and (quantized_model_path is None or quantized_model_path == ''):
             self.model = LLaDAModelLM.from_pretrained(model_path, trust_remote_code=True, torch_dtype=torch.bfloat16, **model_kwargs)
             
             # Load smoothed model weights if provided

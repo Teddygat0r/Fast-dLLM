@@ -37,7 +37,7 @@ class LLaDACalibrationDataset(Dataset):
         raw_data = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
         self.buffer = []
         
-        target_ratios = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1]
+        target_ratios = [0.0]
         
         if hasattr(tokenizer, "mask_token_id") and tokenizer.mask_token_id is not None:
             self.mask_token_id = tokenizer.mask_token_id

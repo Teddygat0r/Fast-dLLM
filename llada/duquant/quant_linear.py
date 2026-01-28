@@ -87,7 +87,7 @@ class DuQuantLinear(nn.Module):
             Output tensor of shape (..., out_features).
         """
         # Quantize activations if configured
-        if self.act_quantizer is not None and self.a_bits < 16:
+        if self.a_bits < 16:
             x = self._quantize_activation(x)
         
         # Get quantized weight
@@ -113,11 +113,11 @@ class DuQuantLinear(nn.Module):
         Returns:
             Quantized activation tensor.
         """
-        if self.act_quantizer is not None:
+        if self.act_quantizer is None:
             # If we have a calibrated quantizer, use it
             # For activations, we typically use a simpler approach
             return self._simple_quant_activation(x)
-        return x
+        return self.act_quantizer(x)
     
     def _simple_quant_activation(self, x: torch.Tensor) -> torch.Tensor:
         """

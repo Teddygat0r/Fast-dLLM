@@ -90,6 +90,7 @@ def collect_act_scales(
     print(f"  Registered hooks on {len(hooks)} Linear layers")
     
     # Run calibration
+    print(f"Running calibration on batch size {dataloader.batch_size}")
     try:
         sample_count = 0
         for batch_idx, batch in enumerate(tqdm(dataloader, total=num_samples, desc="  Calibration")):
