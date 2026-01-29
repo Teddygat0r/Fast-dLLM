@@ -4,8 +4,7 @@ import torch.nn.functional as F
 from typing import Union
 import numpy as np
 import math
-from utils import get_rot, exchange_row_col, get_hadamard
-from quantize.const import CLIPMAX, CLIPMIN
+from model.quantize.const import CLIPMAX, CLIPMIN
 import random
 
 
@@ -15,6 +14,61 @@ def round_ste(x: torch.Tensor):
     Implement Straight-Through Estimator for rounding operation.
     """
     return (x.round() - x).detach() + x
+
+
+def get_rot(block_size: int, device: torch.device) -> torch.Tensor:
+    """
+    Construct a simple orthogonal rotation matrix that rotates in the
+    first two dimensions. The `exchange_row_col` helper is later used
+    to move this 2D rotation to arbitrary row/column pairs.
+    """
+    theta = math.pi / 4  # 45 degree rotation
+    R = torch.eye(block_size, device=device, dtype=torch.float32)
+    if block_size >= 2:
+        c, s = math.cos(theta), math.sin(theta)
+        R[0, 0] = c
+        R[0, 1] = -s
+        R[1, 0] = s
+        R[1, 1] = c
+    return R
+
+
+def exchange_row_col(mat: torch.Tensor, i: int, j: int) -> torch.Tensor:
+    """
+    Swap both row i/j and column i/j of a square matrix.
+    This preserves symmetry/orthogonality of rotation matrices.
+    """
+    if i == j:
+        return mat
+    mat = mat.clone()
+    # swap rows
+    tmp = mat[i, :].clone()
+    mat[i, :] = mat[j, :]
+    mat[j, :] = tmp
+    # swap cols
+    tmp = mat[:, i].clone()
+    mat[:, i] = mat[:, j]
+    mat[:, j] = tmp
+    return mat
+
+
+def get_hadamard(n: int) -> torch.Tensor:
+    """
+    Generate a (Sylvester-type) Hadamard matrix of size n x n.
+    Requires n to be a power of 2.
+    """
+    if n & (n - 1) != 0:
+        raise ValueError("Hadamard size must be a power of 2.")
+    H = torch.ones(1, 1)
+    while H.size(0) < n:
+        H = torch.cat(
+            [
+                torch.cat([H, H], dim=1),
+                torch.cat([H, -H], dim=1),
+            ],
+            dim=0,
+        )
+    return H
 
 
 

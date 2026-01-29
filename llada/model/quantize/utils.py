@@ -1,9 +1,8 @@
 from collections import OrderedDict
-from quantize.int_linear import QuantLinear
+from model.quantize.int_linear import QuantLinear
 import torch
 import torch.nn as nn
-from quantize.int_matmul import QuantMatMul
-from quantize.quantizer import UniformAffineQuantizer
+from model.quantize.int_matmul import QuantMatMul
 
 from int_llada_layer import QuantLLadaDecoderLayer
 from transformation import *

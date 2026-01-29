@@ -1,0 +1,20 @@
+{
+    "wbits": 8,
+    "abits": 8,
+    "group_size": null,
+    "act_group_size": null,
+    "symmetric": false,
+    "smooth": true,
+    "let": false,
+    "lwc": false,
+    "quant_method": "duquant",
+    "block_size": 128,
+    "max_rotation_step": 256,
+    "permutation_times": 1,
+    "alpha": 0.5,
+    "let_alpha": 0.8,
+    "lac": 0.9,
+    "swc": 0.8,
+    "net": "LLaDA-8B-Instruct",
+    "model_path": "GSAI-ML/LLaDA-8B-Instruct"
+  }

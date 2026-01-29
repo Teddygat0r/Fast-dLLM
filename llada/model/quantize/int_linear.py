@@ -1,12 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from quantize.quantizer import UniformAffineQuantizer
+from model.quantize.quantizer import UniformAffineQuantizer
 import time
-
-
-
-
 
 class QuantLinear(nn.Module):
     """
