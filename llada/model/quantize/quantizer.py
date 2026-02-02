@@ -192,7 +192,7 @@ class UniformAffineQuantizer(nn.Module):
             x_dequant = x_dequant.reshape(dim1, dim2)
         if self.deficiency > 0:
             x_dequant = x_dequant[:,:-self.deficiency]
-        return x_dequant  
+        return x_dequant.to(torch.bfloat16)
     
     def permutation_random(self, weight, other=None):
         hidden_dim = weight.shape[-1]
@@ -482,7 +482,7 @@ class UniformAffineQuantizer(nn.Module):
         del self.scale
         del self.round_zero_point
 
-    def register_duquant_params(self):
+    def register_duquant_params(self, permutation_list_length = 4096):
         if self.rotate is not True:
             return
         permutation_list, R = self.permutation_list, self.R
@@ -502,3 +502,18 @@ class UniformAffineQuantizer(nn.Module):
             except:
                 self.permutation_list = quantizer_ref.permutation_list
             self.init_duquant_params = torch.tensor(1)
+
+    def load_duquant_params(self, state_dict, layer_name = ""):
+        for name, param in state_dict.items():
+            if name.find(layer_name) > -1 and (name.find('R') > -1 or name.find('permutation_list') > -1 or name.find('init_duquant_params') > -1):
+                if hasattr(self, name.split('.')[-1]):
+                    delattr(self, name.split('.')[-1])
+                self.register_buffer(name.split('.')[-1], param.clone().detach().to('cuda'))
+        
+    def load_scales_and_zeros(self, state_dict, layer_name = ""):
+        for name, param in state_dict.items():
+            if name.find(layer_name) > -1 and (name.find('scales') > -1 or name.find('zeros') > -1):
+                if hasattr(self, name.split('.')[-1]):
+                    delattr(self, name.split('.')[-1])
+                self.register_buffer(name.split('.')[-1], param.clone().detach().to('cuda'))
+        

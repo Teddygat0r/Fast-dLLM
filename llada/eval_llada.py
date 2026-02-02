@@ -20,6 +20,7 @@ This file is inspired by the code from https://github.com/ML-GSAI/SMDM
 '''
 import accelerate
 import torch
+import torch.nn as nn
 import re
 from pathlib import Path
 import random
@@ -45,11 +46,7 @@ try:
 except ImportError:
     SMOOTHQUANT_AVAILABLE = False
 
-try:
-    from duquant import apply_duquant_pipeline
-    DUQUANT_AVAILABLE = True
-except ImportError:
-    DUQUANT_AVAILABLE = False
+from duquant_utils import create_quant_args, replace_linear_layers
 
 # #region agent log
 DEBUG_LOG_PATH = "/home/joshuaz/dllm/Fast-dLLM/.cursor/debug.log"
@@ -100,14 +97,9 @@ class LLaDAEvalHarness(LM):
         smoothquant_scales_path=None,
         smoothquant_skip_quantization=False,
         use_duquant_pipeline=False,
-        duquant_n_bits=8,
-        duquant_block_size=128,
-        duquant_max_rotation_step=256,
-        duquant_permutation_times=1,
-        duquant_a_bits=8,
         duquant_seq_len=512,
         duquant_batch_size=1,
-        duquant_calibration_samples=128,
+        duquant_weight_path=None,  # Path to saved DuQuant parameters (.pth file)
         **kwargs,
     ):
         '''
@@ -208,44 +200,54 @@ class LLaDAEvalHarness(LM):
             print("✓ SmoothQuant pipeline model loaded with QuantLinear layers")
 
         if use_duquant_pipeline:
-            if not DUQUANT_AVAILABLE:
-                raise ImportError(
-                    "DuQuant pipeline requested but duquant module not found. "
-                    "Make sure the duquant folder is in the llada directory."
-                )
-
-            print(f"\n{'='*60}")
-            print("Loading model with DuQuant Pipeline")
-            print(f"  Weight bits: {duquant_n_bits}")
-            print(f"  Activation bits: {duquant_a_bits}")
-            print(f"  Block size: {duquant_block_size}")
-            print(f"  Max rotation steps: {duquant_max_rotation_step}")
-            print(f"  Permutation times: {duquant_permutation_times}")
-            print(f"  Calibration samples: {duquant_calibration_samples}")
-            print(f"  Sequence length: {duquant_seq_len}")
-            print(f"  Batch size: {duquant_batch_size}")
+            # Convert string 'True'/'False' to boolean for use_duquant_pipeline
+            if isinstance(use_duquant_pipeline, str):
+                use_duquant_pipeline = use_duquant_pipeline.lower() == 'true'
             
-            # Determine device for duquant pipeline
+            # Determine device for duquant
             dq_device = f'{self.accelerator.device}' if self.accelerator is not None else device
             
-            self.model, _ = apply_duquant_pipeline(
-                model_path=model_path,
-                calibration_samples=int(duquant_calibration_samples),
-                n_bits=int(duquant_n_bits),
-                a_bits=int(duquant_a_bits),
-                block_size=int(duquant_block_size),
-                max_rotation_step=int(duquant_max_rotation_step),
-                permutation_times=int(duquant_permutation_times),
-                seq_len=int(duquant_seq_len),
-                batch_size=int(duquant_batch_size),
-                device=dq_device,
-                skip_layers=["lm_head"],
-            )
+            # Check if we have a saved DuQuant model to load
+            if duquant_weight_path is not None and duquant_weight_path != '' and os.path.exists(duquant_weight_path):
+                # Load saved DuQuant model using the pattern from chat_duquant_original.py
+                print(f"\n{'='*60}")
+                print("Loading pre-saved DuQuant model")
+                print(f"{'='*60}")
+                print(f"  Weight path: {duquant_weight_path}")
+                
+                # Load base model first
+                self.model = LLaDAModelLM.from_pretrained(
+                    model_path, 
+                    trust_remote_code=True, 
+                    device_map=dq_device, 
+                    dtype=torch.bfloat16
+                )
+                
+                # Load quant args from config file
+                quant_args_path = os.path.join(os.path.dirname(__file__), 'model/quantize/quant_args.json')
+                quant_config = json.load(open(quant_args_path))
+                quant_args = create_quant_args(quant_config)
+                
+                # Replace linear layers with QuantLinear layers
+                print("Replacing Linear layers with QuantLinear...")
+                replace_linear_layers(self.model, quant_args, duquant_weight_path, device=dq_device)
+                
+                # Load the quantized model weights
+                print("Loading DuQuant parameters...")
+                missing_keys, unexpected_keys = self.model.load_state_dict(
+                    torch.load(duquant_weight_path, map_location=dq_device), 
+                    strict=False
+                )
+                if missing_keys:
+                    print(f"  Missing keys: {len(missing_keys)} (expected for QuantLinear params)")
+                if unexpected_keys:
+                    print(f"  Unexpected keys: {len(unexpected_keys)}")
+                
+                print("✓ Pre-saved DuQuant model loaded successfully")
 
-            #skip the other loading paths
+            # Skip the other loading paths
             quantized_model_path = None
             smoothed_model_path = None
-            print("✓ DuQuant pipeline model loaded")
 
         # Load quantized model if provided (takes precedence, unless smoothquant pipeline was used)
         if not use_smoothquant_pipeline and not use_duquant_pipeline and quantized_model_path is not None and quantized_model_path != '':
