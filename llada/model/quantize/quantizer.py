@@ -192,7 +192,7 @@ class UniformAffineQuantizer(nn.Module):
             x_dequant = x_dequant.reshape(dim1, dim2)
         if self.deficiency > 0:
             x_dequant = x_dequant[:,:-self.deficiency]
-        return x_dequant.to(torch.bfloat16)
+        return x_dequant
     
     def permutation_random(self, weight, other=None):
         hidden_dim = weight.shape[-1]
