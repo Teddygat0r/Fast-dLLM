@@ -46,7 +46,7 @@ try:
 except ImportError:
     SMOOTHQUANT_AVAILABLE = False
 
-from duquant_utils import create_quant_args, replace_linear_layers
+from duquant_utils import create_quant_args, replace_linear_layers, replace_llada_blocks
 
 # #region agent log
 DEBUG_LOG_PATH = "/home/joshuaz/dllm/Fast-dLLM/.cursor/debug.log"
@@ -227,6 +227,9 @@ class LLaDAEvalHarness(LM):
                 quant_args_path = os.path.join(os.path.dirname(__file__), 'model/quantize/quant_args.json')
                 quant_config = json.load(open(quant_args_path))
                 quant_args = create_quant_args(quant_config)
+
+                print("Replacing LLaDA blocks")
+                replace_llada_blocks(self.model, quant_args, device=dq_device)
                 
                 # Replace linear layers with QuantLinear layers
                 print("Replacing Linear layers with QuantLinear...")

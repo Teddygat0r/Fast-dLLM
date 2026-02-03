@@ -34,13 +34,13 @@ class QuantMatMul(nn.Module):
     def quant_x1(self, x1):
         if self.use_act_quant:
             x1 = self.x1_quantizer(x1)
-        return x1.to(self.original_dtype)
+        return x1
 
     def quant_x2(self, x2):
         if self.use_act_quant:
             x2 = self.x2_quantizer(x2)
-        return x2.to(self.original_dtype)
+        return x2
 
     def forward(self, x1, x2):
         out = self.matmul_func(x1, x2)
-        return out.to(self.original_dtype)
+        return out

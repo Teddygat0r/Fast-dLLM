@@ -52,23 +52,15 @@ def exchange_row_col(mat: torch.Tensor, i: int, j: int) -> torch.Tensor:
     return mat
 
 
-def get_hadamard(n: int) -> torch.Tensor:
-    """
-    Generate a (Sylvester-type) Hadamard matrix of size n x n.
-    Requires n to be a power of 2.
-    """
-    if n & (n - 1) != 0:
-        raise ValueError("Hadamard size must be a power of 2.")
-    H = torch.ones(1, 1)
-    while H.size(0) < n:
-        H = torch.cat(
-            [
-                torch.cat([H, H], dim=1),
-                torch.cat([H, -H], dim=1),
-            ],
-            dim=0,
-        )
-    return H
+def get_hadamard(n): 
+    if n == 1:
+        return torch.tensor([[1.]], dtype=torch.float32)
+    else:
+        assert n % 1 == 0, "The size should be divided by 2."
+        H_n_minus_1 = get_hadamard(n//2)
+        return torch.cat([torch.cat([H_n_minus_1, H_n_minus_1], dim=1),
+                          torch.cat([H_n_minus_1, -H_n_minus_1], dim=1)], dim=0) / math.sqrt(2)
+
 
 
 

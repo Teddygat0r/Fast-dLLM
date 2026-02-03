@@ -3,11 +3,10 @@ import torch
 from torch import nn
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from model.modeling_llada import LLaDAModelLM
-from model.quantize.int_linear import QuantLinear
 from duquant_utils import create_quant_args, replace_linear_layers, replace_llada_blocks
-import copy
 import json
 from generate import generate, generate_with_prefix_cache, generate_with_dual_cache
+import gc
 
 DEVICE = "cuda"
 
@@ -32,12 +31,12 @@ def load_model(
     missing_keys, unexpected_keys = model.load_state_dict(torch.load(weight_path), strict=False)
     print(f"Missing keys: {missing_keys}")
     print(f"Unexpected keys: {unexpected_keys}")
-    # finished loading model
 
     # print("\n\n\n")
     # print("Model Keys: ")
     # print(model.state_dict().keys())
     # print("\n\n\n")
+    print(gc.get_stats())
     model.eval()
     return model, tokenizer
 

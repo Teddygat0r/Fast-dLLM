@@ -92,7 +92,9 @@ def replace_llada_blocks(model, quant_args, device="cuda"):
     
     for name, module in blocks:
         print("Replacing block", name)
-        new_block = LLaDaQuantLayer(module, quant_args).to(device)
+        original_dtype = next(module.parameters()).dtype
+        new_block = LLaDaQuantLayer(module, quant_args).to(device=device, dtype=original_dtype)
+        new_block.load_state_dict(module.state_dict())
         new_block.set_quant_state(weight_quant=False, act_quant=True)
         
         parent = model
@@ -152,10 +154,12 @@ def replace_linear_layers(model, quant_args, weight_path, device="cuda"):
             )
 
             quant_linear.weight_quantizer.load_scales_and_zeros(layer_params, layer_name)
-            quant_linear.act_quantizer.load_scales_and_zeros(layer_params, layer_name)
+            # unnecessary in loading
+            # quant_linear.act_quantizer.load_scales_and_zeros(layer_params, layer_name)
 
             quant_linear.weight_quantizer.load_duquant_params(layer_params, layer_name)
             quant_linear.act_quantizer.load_duquant_params(layer_params, layer_name)
+            quant_linear = quant_linear.to(dtype=module.weight.dtype)
 
             quant_linear.set_quant_state(weight_quant=False, act_quant=True)
             

@@ -8,10 +8,10 @@ import math
 class LLaDaQuantLayer(LLaDALlamaBlock):
     def __init__(self, original_block: LLaDALlamaBlock, args):
         super().__init__(original_block.layer_id, original_block.config, original_block._LLaDALlamaBlock__cache)
-        self.load_state_dict(original_block.state_dict())
-        
-        self.qkt_matmul = QuantMatMul(args.q_quant_params, args.k_quant_params, matmul_func=torch.matmul, rotate=None)
-        self.pv_matmul = QuantMatMul(args.p_quant_params, args.v_quant_params, matmul_func=torch.matmul, rotate=None)
+        # Use same dtype as original block so QuantMatMul outputs match the rest of the block
+        block_dtype = next(original_block.parameters()).dtype
+        self.qkt_matmul = QuantMatMul(args.q_quant_params, args.k_quant_params, matmul_func=torch.matmul, rotate=None, original_dtype=block_dtype)
+        self.pv_matmul = QuantMatMul(args.p_quant_params, args.v_quant_params, matmul_func=torch.matmul, rotate=None, original_dtype=block_dtype)
         self.flash_attn_func = None
     
     def _scaled_dot_product_attention(
