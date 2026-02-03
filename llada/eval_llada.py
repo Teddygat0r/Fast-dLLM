@@ -219,7 +219,7 @@ class LLaDAEvalHarness(LM):
                 self.model = LLaDAModelLM.from_pretrained(
                     model_path, 
                     trust_remote_code=True, 
-                    device_map=dq_device, 
+                    device_map="cpu",
                     dtype=torch.bfloat16
                 )
                 
@@ -227,25 +227,24 @@ class LLaDAEvalHarness(LM):
                 quant_args_path = os.path.join(os.path.dirname(__file__), 'model/quantize/quant_args.json')
                 quant_config = json.load(open(quant_args_path))
                 quant_args = create_quant_args(quant_config)
+                weights = torch.load(duquant_weight_path, map_location="cpu")
 
                 print("Replacing LLaDA blocks")
-                replace_llada_blocks(self.model, quant_args, device=dq_device)
+                replace_llada_blocks(self.model, quant_args, device="cpu")
                 
                 # Replace linear layers with QuantLinear layers
                 print("Replacing Linear layers with QuantLinear...")
-                replace_linear_layers(self.model, quant_args, duquant_weight_path, device=dq_device)
+                replace_linear_layers(self.model, quant_args, weights)
                 
                 # Load the quantized model weights
                 print("Loading DuQuant parameters...")
-                missing_keys, unexpected_keys = self.model.load_state_dict(
-                    torch.load(duquant_weight_path, map_location=dq_device), 
-                    strict=False
-                )
+                missing_keys, unexpected_keys = self.model.load_state_dict(weights, strict=False)
                 if missing_keys:
                     print(f"  Missing keys: {len(missing_keys)} (expected for QuantLinear params)")
                 if unexpected_keys:
                     print(f"  Unexpected keys: {len(unexpected_keys)}")
                 
+                self.model.to(dq_device)
                 print("✓ Pre-saved DuQuant model loaded successfully")
 
             # Skip the other loading paths

@@ -115,7 +115,7 @@ def replace_llada_blocks(model, quant_args, device="cuda"):
     gc.collect()
         
 
-def replace_linear_layers(model, quant_args, weight_path, device="cuda"):
+def replace_linear_layers(model, quant_args, weights):
     """
     Replace Linear layers with QuantLinear layers for DuQuant.
     This function loads the saved DuQuant parameters and applies them
@@ -130,7 +130,6 @@ def replace_linear_layers(model, quant_args, weight_path, device="cuda"):
     # Import here to avoid circular imports
     from model.quantize.int_linear import QuantLinear
     
-    full_model_params = torch.load(weight_path, map_location=device)
     for name, module in dict(model.named_modules()).items():
         if name == "model.transformer.ff_out":
             continue
@@ -142,7 +141,7 @@ def replace_linear_layers(model, quant_args, weight_path, device="cuda"):
                 continue  # Skip layers that don't match expected pattern
             
             # Filter layer params, ensuring keys are strings before using .find()
-            layer_params = {k:v for k,v in full_model_params.items() 
+            layer_params = {k:v for k,v in weights.items() 
                            if isinstance(k, str) and k.find(layer_name) > -1 and k.find(f".{layer_index}.") > -1}
             
             weight_quant_params = quant_args.weight_quant_params

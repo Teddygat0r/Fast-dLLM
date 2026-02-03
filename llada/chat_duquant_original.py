@@ -15,20 +15,22 @@ def load_model(
     weight_path: str,
     args,
 ):
-    model = LLaDAModelLM.from_pretrained(model_path, trust_remote_code=True, device_map=DEVICE, dtype=torch.bfloat16)
+    model = LLaDAModelLM.from_pretrained(model_path, trust_remote_code=True, device_map="cpu", dtype=torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     quant_config = json.load(open('model/quantize/quant_args.json'))
     quant_args = create_quant_args(quant_config)
 
-    # Replace LLaDA blocks with Quantized LLaDA blocks
-    replace_llada_blocks(model, quant_args, device=DEVICE)
+    weights = torch.load(weight_path, map_location="cpu")
 
-    replace_linear_layers(model, quant_args, weight_path, device=DEVICE)
+    # Replace LLaDA blocks with Quantized LLaDA blocks
+    replace_llada_blocks(model, quant_args, device="cpu")
+
+    replace_linear_layers(model, quant_args, weights)
 
     print("Loading Quantized Model...")
     # we expect to have missing keys: (act quantizer scales and zeros)
     # we expect to have unexpected keys: (ori layers, biases)
-    missing_keys, unexpected_keys = model.load_state_dict(torch.load(weight_path), strict=False)
+    missing_keys, unexpected_keys = model.load_state_dict(weights, strict=False)
     print(f"Missing keys: {missing_keys}")
     print(f"Unexpected keys: {unexpected_keys}")
 
@@ -37,7 +39,9 @@ def load_model(
     # print(model.state_dict().keys())
     # print("\n\n\n")
     print(gc.get_stats())
+    model.to(DEVICE)
     model.eval()
+    # model = torch.compile(model, mode="reduce-overhead")
     return model, tokenizer
 
 def chat(args):
