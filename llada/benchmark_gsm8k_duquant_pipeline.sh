@@ -25,6 +25,9 @@ cd "${SCRIPT_DIR}"
 export HF_ALLOW_CODE_EVAL=1
 export HF_DATASETS_TRUST_REMOTE_CODE=true
 
+# Restrict to a single GPU
+export CUDA_VISIBLE_DEVICES=0
+
 # ---------------------------------------------------------------------------
 # Default configuration
 # ---------------------------------------------------------------------------
