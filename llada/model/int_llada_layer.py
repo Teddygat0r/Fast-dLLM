@@ -38,16 +38,17 @@ class LLaDaQuantLayer(LLaDALlamaBlock):
 
         L, S = q.size(-2), k.size(-2)
         scale_factor = 1 / math.sqrt(q.size(-1)) 
-        attn_bias = torch.zeros(L, S, dtype=q.dtype, device=q.device)
+        # no biases
+        # attn_bias = torch.zeros(L, S, dtype=q.dtype, device=q.device)
 
         # attn_weight = q @ k.transpose(-2, -1) * scale_factor
         q = self.qkt_matmul.quant_x1(q)
         k = self.qkt_matmul.quant_x2(k).transpose(-2, -1)
         attn_weight = self.qkt_matmul(q, k) * scale_factor
 
-        attn_weight += attn_bias
+        # attn_weight += attn_bias
         attn_weight = torch.softmax(attn_weight, dim=-1)
-        attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+        attn_weight = torch.dropout(attn_weight, dropout_p, train=self.training)
 
         # return attn_weight @ v
         attn_weight = self.pv_matmul.quant_x1(attn_weight)

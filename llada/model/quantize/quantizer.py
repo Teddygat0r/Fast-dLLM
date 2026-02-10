@@ -169,7 +169,7 @@ class UniformAffineQuantizer(nn.Module):
             dim1, dim2 = x.shape
             x = x.reshape(-1, self.group_size)
             
-        x_int = round_ste(x.float() / scale).half()    # avoid overflow
+        x_int = round_ste(x.float() / scale).to(dtype=torch.bfloat16)    # avoid overflow
         
         if round_zero_point is not None:
             x_int = x_int.add(round_zero_point)
