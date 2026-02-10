@@ -178,3 +178,53 @@ def replace_linear_layers(model, quant_args, weights):
             
             del module
     gc.collect()
+
+@torch.no_grad()
+def set_init_duquant_params_state(model, mode):
+    if isinstance(mode, bool):
+        mode = torch.tensor(mode)
+    for name, module in model.named_modules():
+        if hasattr(module, "init_duquant_params"):
+            module.init_duquant_params = mode
+
+def set_quant_state(model, weight_quant: bool = False, act_quant: bool = False):
+    from model.quantize.int_linear import QuantLinear
+    from model.quantize.int_matmul import QuantMatMul
+    for name, module in model.named_modules():
+        if isinstance(module, (QuantLinear, QuantMatMul)):
+            module.set_quant_state(weight_quant, act_quant)
+
+# llada doesn't have biases. 
+def smooth_ln_to_fcs(ln, fcs, scales):
+    if hasattr(ln, 'bias') and ln.bias is not None:
+        # this should not happen
+        print(f"Bias found for {ln.__class__.__name__}")
+        ln.bias.div_(scales.to(ln.bias.device))
+
+    ln.weight.div_(scales.to(ln.weight.device))
+    for fc in fcs:
+        fc.weight.mul_(scales.to(fc.weight.device).view(1, -1))
+
+def smooth_fc_to_fc(fc1, fc2, scales):
+    fc1.weight.div_(scales.to(fc1.weight.device).view(-1, 1))
+    fc2.weight.mul_(scales.to(fc2.weight.device).view(1, -1))
+
+def smooth_q_k(q, k, scales):
+    q.weight.div_(scales.to(q.weight.device).view(-1, 1))
+    k.weight.mul_(scales.to(k.weight.device).view(1, -1))
+
+@torch.no_grad()
+def smooth_and_let_inplace(block, args):
+    smooth_ln_to_fcs(block.attn_norm, [block.q_proj, block.k_proj, block.v_proj], block.qkv_smooth_scale)
+    smooth_ln_to_fcs(block.ff_norm,[block.up_proj,block.ff_proj], block.fc1_smooth_scale)
+    smooth_fc_to_fc(block.up_proj,block.ff_out, block.down_smooth_scale)
+    smooth_fc_to_fc(block.v_proj,block.attn_out, block.out_smooth_scale)
+    smooth_q_k(block.q_proj, block.k_proj, block.qkt_smooth_scale)
+
+@torch.no_grad()
+def set_init_duquant_params_state(block, mode):
+    if isinstance(mode, bool):
+        mode = torch.tensor(mode)
+    for name, module in block.named_modules():
+        if hasattr(module, "init_duquant_params"):
+            module.init_duquant_params = mode

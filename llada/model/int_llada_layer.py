@@ -1,6 +1,7 @@
 from typing import Optional
 import torch
 import torch.nn as nn
+from model.quantize.int_linear import QuantLinear
 from model.modeling_llada import LLaDALlamaBlock, ModelConfig, BufferCache
 from model.quantize.int_matmul import QuantMatMul
 import math
@@ -56,3 +57,9 @@ class LLaDaQuantLayer(LLaDALlamaBlock):
     def set_quant_state(self, weight_quant: bool = False, act_quant: bool = False):
         self.qkt_matmul.set_quant_state(weight_quant, act_quant)
         self.pv_matmul.set_quant_state(weight_quant, act_quant)
+
+    def register_duquant_params(self):
+        for name, module in self.named_modules():
+            if isinstance(module, QuantLinear):
+                module.weight_quantizer.register_duquant_params()
+                module.act_quantizer.register_duquant_params()
