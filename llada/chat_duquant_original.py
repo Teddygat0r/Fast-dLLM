@@ -3,7 +3,7 @@ import torch
 from torch import nn
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from model.modeling_llada import LLaDAModelLM
-from duquant_utils import create_quant_args, replace_linear_layers, replace_llada_blocks
+from duquant_utils import compile_linear, create_quant_args, replace_linear_layers, replace_llada_blocks
 import json
 from generate import generate, generate_with_prefix_cache, generate_with_dual_cache
 import gc
@@ -18,6 +18,9 @@ def load_model(
     model = LLaDAModelLM.from_pretrained(model_path, trust_remote_code=True, device_map="cpu", dtype=torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     quant_config = json.load(open('model/quantize/quant_args.json'))
+
+    quant_config["wbits"] = args.wbits
+    quant_config["abits"] = args.abits
     quant_args = create_quant_args(quant_config)
 
     weights = torch.load(weight_path, map_location="cpu")
@@ -39,6 +42,7 @@ def load_model(
     # print(model.state_dict().keys())
     # print("\n\n\n")
     print(gc.get_stats())
+    compile_linear(model)
     model.to(DEVICE)
     model.eval()
     # model = torch.compile(model, mode="reduce-overhead")
@@ -155,6 +159,11 @@ if __name__ == "__main__":
                         help="HuggingFace model path")
     parser.add_argument("--weight_path", type=str, default="models/quantized_model.pth",
                         help="Weight Loading Path")
+
+    parser.add_argument("--wbits", type=int, default=4,
+                        help="Weight quantization bits")
+    parser.add_argument("--abits", type=int, default=4,
+                        help="Activation quantization bits")
 
     # Cache options
     parser.add_argument("--use_cache", action="store_true",

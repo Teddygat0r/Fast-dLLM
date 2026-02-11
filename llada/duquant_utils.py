@@ -228,3 +228,10 @@ def set_init_duquant_params_state(block, mode):
     for name, module in block.named_modules():
         if hasattr(module, "init_duquant_params"):
             module.init_duquant_params = mode
+
+@torch.no_grad()
+def compile_linear(model):
+    from model.quantize.int_linear import QuantLinear
+    for name, module in model.named_modules():
+        if isinstance(module, QuantLinear):
+            module = torch.compile(module, mode="reduce-overhead")
