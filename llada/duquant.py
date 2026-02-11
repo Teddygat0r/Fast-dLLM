@@ -121,7 +121,7 @@ def duquant(model: nn.Module, act_scales: dict, dataloader, args):
         with torch.no_grad():
             for name, module in qlayer.named_modules():
                 if isinstance(module, QuantLinear):
-                    module.weight = module.weight_quantizer(module.weight, return_no_quant=True)
+                    module.weight = module.weight_quantizer(module.weight, return_no_quant=False)
 
         set_quant_state(qlayer, weight_quant=False, act_quant=True)
         layers[i] = qlayer.to("cpu")
