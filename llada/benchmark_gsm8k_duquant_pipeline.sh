@@ -40,6 +40,9 @@ block_length=32
 limit=""  # Empty means no limit (full dataset)
 num_fewshot=5
 batch_size=1
+wbits=8
+abits=8
+symmetric=false
 model_path="GSAI-ML/LLaDA-8B-Instruct"
 
 # Prefix cache setting
@@ -64,9 +67,12 @@ usage() {
   echo "Options:"
   echo "  --limit N                    # limit to N GSM8k questions (default: full dataset)"
   echo "  --batch-size N               # batch size for evaluation (default: 1)"
-  echo "  --duquant-weight-path PATH   # path to pre-saved DuQuant .pth (default: models/duquant_parameters.pth)"
+  echo "  --wbits N                    # weight bits for DuQuant (default: 8)"
+  echo "  --abits N                    # activation bits for DuQuant (default: 8)"
+  echo "  --duquant-weight-path PATH   # path to pre-saved DuQuant .pth (default: models/quantized_model.pth)"
   echo "  --no-duquant-weights         # skip DuQuant benchmark (do not run with saved weights)"
   echo "  --no-prefix-cache            # disable prefix cache (use_cache=False)"
+  echo "  --symmetric                  # use symmetric quantization (default: False)"
   echo "  -h, --help                   # show this help"
   exit 1
 }
@@ -114,7 +120,25 @@ while [[ $# -gt 0 ]]; do
       use_prefix_cache=false
       shift
       ;;
-    -h|--help)
+    --wbits)
+      [[ $# -ge 2 ]] || usage
+      wbits="$2"
+      shift 2
+      ;;
+    --abits)
+      [[ $# -ge 2 ]] || usage
+      abits="$2"
+      shift 2
+      ;;
+    --symmetric)
+      [[ $# -ge 2 ]] || usage
+      symmetric="$2"
+      shift 2
+      ;;
+    -h)
+      usage
+      ;;
+    --help)
       usage
       ;;
     *)
@@ -194,7 +218,7 @@ LOG_FILE="${LOG_DIR}/gsm8k_duquant_pipeline_${TIMESTAMP}.log"
         --batch_size "${batch_size}" \
         --confirm_run_unsafe_code \
         --model llada_dist \
-        --model_args "model_path=${model_path},gen_length=${length},steps=${length},block_length=${block_length},use_cache=${use_prefix_cache^},show_speed=True,use_duquant_pipeline=True,duquant_weight_path=${duquant_weight_path}"
+        --model_args "model_path=${model_path},gen_length=${length},steps=${length},block_length=${block_length},use_cache=${use_prefix_cache^},show_speed=True,use_duquant_pipeline=True,duquant_weight_path=${duquant_weight_path},wbits=${wbits},abits=${abits},symmetric=${symmetric}"
       echo ""
     fi
   else

@@ -46,7 +46,7 @@ try:
 except ImportError:
     SMOOTHQUANT_AVAILABLE = False
 
-from duquant_utils import create_quant_args, replace_linear_layers, replace_llada_blocks
+from duquant_utils import compile_linear, create_quant_args, replace_linear_layers, replace_llada_blocks
 
 # #region agent log
 DEBUG_LOG_PATH = "/home/joshuaz/dllm/Fast-dLLM/.cursor/debug.log"
@@ -78,6 +78,9 @@ class LLaDAEvalHarness(LM):
         steps=1024,
         gen_length=1024,
         block_length=1024,
+        wbits=8,
+        abits=8,
+        symmetric=False,
         remasking='low_confidence',
         device="cuda",
         use_cache=False,
@@ -226,6 +229,11 @@ class LLaDAEvalHarness(LM):
                 # Load quant args from config file
                 quant_args_path = os.path.join(os.path.dirname(__file__), 'model/quantize/quant_args.json')
                 quant_config = json.load(open(quant_args_path))
+
+                # Ensure int (model_args from lm_eval may pass strings)
+                quant_config["wbits"] = int(wbits)
+                quant_config["abits"] = int(abits)
+                quant_config["symmetric"] = symmetric
                 quant_args = create_quant_args(quant_config)
                 weights = torch.load(duquant_weight_path, map_location="cpu")
 
@@ -243,6 +251,7 @@ class LLaDAEvalHarness(LM):
                     print(f"  Missing keys: {len(missing_keys)} (expected for QuantLinear params)")
                 if unexpected_keys:
                     print(f"  Unexpected keys: {len(unexpected_keys)}")
+                compile_linear(self.model)
                 
                 self.model.to(dq_device)
                 print("✓ Pre-saved DuQuant model loaded successfully")
