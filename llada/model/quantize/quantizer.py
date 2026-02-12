@@ -366,8 +366,8 @@ class UniformAffineQuantizer(nn.Module):
                 else:
                     x_size = x.shape
                     x_type = x.dtype
-                    if x_size == torch.Size([1, 4096]):
-                        import ipdb; ipdb.set_trace()
+                    # if x_size == torch.Size([1, 4096]):
+                        # import ipdb; ipdb.set_trace()
                     if self.permutation_list is not None:
                         for i in range(len(self.permutation_list)):
                             x = x.reshape(-1, self.block_size)

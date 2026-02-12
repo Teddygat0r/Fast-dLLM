@@ -3,7 +3,7 @@ import torch
 from torch import nn
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from model.modeling_llada import LLaDAModelLM
-from duquant_utils import compile_linear, create_quant_args, replace_linear_layers, replace_llada_blocks
+from duquant_utils import compile_linear, create_quant_args, replace_linear_layers, replace_llada_blocks, replace_act_quantizers_with_inference
 import json
 from generate import generate, generate_with_prefix_cache, generate_with_dual_cache
 import gc
@@ -29,6 +29,8 @@ def load_model(
     replace_llada_blocks(model, quant_args, device="cpu")
 
     replace_linear_layers(model, quant_args, weights)
+
+    replace_act_quantizers_with_inference(model)
 
     print("Loading Quantized Model...")
     # we expect to have missing keys: (act quantizer scales and zeros)
