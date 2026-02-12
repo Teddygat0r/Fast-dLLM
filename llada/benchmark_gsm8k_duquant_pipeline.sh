@@ -72,6 +72,7 @@ usage() {
   echo "  --duquant-weight-path PATH   # path to pre-saved DuQuant .pth (default: models/quantized_model.pth)"
   echo "  --no-duquant-weights         # skip DuQuant benchmark (do not run with saved weights)"
   echo "  --no-prefix-cache            # disable prefix cache (use_cache=False)"
+  echo "  --symmetric                  # use symmetric quantization (default: False)"
   echo "  -h, --help                   # show this help"
   exit 1
 }
