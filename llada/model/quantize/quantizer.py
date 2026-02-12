@@ -474,7 +474,7 @@ class UniformAffineQuantizer(nn.Module):
         del self.scale
         del self.round_zero_point
 
-    def register_duquant_params(self, permutation_list_length = 4096):
+    def register_duquant_params(self):
         if self.rotate is not True:
             return
         permutation_list, R = self.permutation_list, self.R

@@ -42,6 +42,7 @@ num_fewshot=5
 batch_size=1
 wbits=8
 abits=8
+symmetric=false
 model_path="GSAI-ML/LLaDA-8B-Instruct"
 
 # Prefix cache setting
@@ -128,6 +129,11 @@ while [[ $# -gt 0 ]]; do
       abits="$2"
       shift 2
       ;;
+    --symmetric)
+      [[ $# -ge 2 ]] || usage
+      symmetric="$2"
+      shift 2
+      ;;
     -h)
       usage
       ;;
@@ -211,7 +217,7 @@ LOG_FILE="${LOG_DIR}/gsm8k_duquant_pipeline_${TIMESTAMP}.log"
         --batch_size "${batch_size}" \
         --confirm_run_unsafe_code \
         --model llada_dist \
-        --model_args "model_path=${model_path},gen_length=${length},steps=${length},block_length=${block_length},use_cache=${use_prefix_cache^},show_speed=True,use_duquant_pipeline=True,duquant_weight_path=${duquant_weight_path},wbits=${wbits},abits=${abits}"
+        --model_args "model_path=${model_path},gen_length=${length},steps=${length},block_length=${block_length},use_cache=${use_prefix_cache^},show_speed=True,use_duquant_pipeline=True,duquant_weight_path=${duquant_weight_path},wbits=${wbits},abits=${abits},symmetric=${symmetric}"
       echo ""
     fi
   else

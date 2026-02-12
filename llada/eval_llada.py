@@ -80,6 +80,7 @@ class LLaDAEvalHarness(LM):
         block_length=1024,
         wbits=8,
         abits=8,
+        symmetric=False,
         remasking='low_confidence',
         device="cuda",
         use_cache=False,
@@ -232,6 +233,7 @@ class LLaDAEvalHarness(LM):
                 # Ensure int (model_args from lm_eval may pass strings)
                 quant_config["wbits"] = int(wbits)
                 quant_config["abits"] = int(abits)
+                quant_config["symmetric"] = symmetric
                 quant_args = create_quant_args(quant_config)
                 weights = torch.load(duquant_weight_path, map_location="cpu")
 
