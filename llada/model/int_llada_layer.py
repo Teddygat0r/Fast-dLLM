@@ -33,10 +33,10 @@ class LLaDaQuantLayer(LLaDALlamaBlock):
         #                      k, v: (batch_size, seq_len, d_model // n_kv_heads)
         x_normed = self.attn_norm(x) #x:torch.Size([2, 168, 4096])
         q = self.q_proj(x_normed) #q:torch.Size([2, 168, 4096])
-        # if not self.init_duquant_params and isinstance(self.q_proj, QuantLinear) and self.q_proj.init_duquant_params:
-        #     if isinstance(self.k_proj, QuantLinear) and isinstance(self.v_proj, QuantLinear):
-        #         self.k_proj.copy_quantizers_duquant_params(self.q_proj)
-        #         self.v_proj.copy_quantizers_duquant_params(self.q_proj)
+        if not self.init_duquant_params and isinstance(self.q_proj, QuantLinear) and self.q_proj.init_duquant_params:
+            if isinstance(self.k_proj, QuantLinear) and isinstance(self.v_proj, QuantLinear):
+                self.k_proj.copy_quantizers_duquant_params(self.q_proj)
+                self.v_proj.copy_quantizers_duquant_params(self.q_proj)
 
         k = self.k_proj(x_normed) #k:torch.Size([2, 168, 4096])
         v = self.v_proj(x_normed) #v:torch.Size([2, 168, 4096])
@@ -63,9 +63,9 @@ class LLaDaQuantLayer(LLaDALlamaBlock):
         else:
             x = self.ff_norm(x)
         x_ff = self.ff_proj(x)
-        # if not self.init_duquant_params and isinstance(self.ff_proj, QuantLinear) and self.ff_proj.init_duquant_params:
-        #     if isinstance(self.up_proj, QuantLinear):
-        #         self.up_proj.copy_quantizers_duquant_params(self.ff_proj)
+        if not self.init_duquant_params and isinstance(self.ff_proj, QuantLinear) and self.ff_proj.init_duquant_params:
+            if isinstance(self.up_proj, QuantLinear):
+                self.up_proj.copy_quantizers_duquant_params(self.ff_proj)
         x_up = self.up_proj(x)
         x = x_ff
         if self._activation_checkpoint_fn is not None:
