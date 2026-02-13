@@ -5,6 +5,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from duquant_utils import create_quant_args, set_init_duquant_params_state, set_quant_state, smooth_and_let_inplace
+from datautils import get_wikitext2
 from model.quantize.int_linear import QuantLinear
 from model.int_llada_layer import LLaDaQuantLayer
 
@@ -36,11 +37,13 @@ def duquant(model: nn.Module, act_scales: dict, dataloader, args):
 
         def forward(self, inp, **kwargs):
             if len(inp.shape) == 3:
-                 inps[cache["i"]] = inp[0] 
+                print(inp.shape)
+                inps[cache["i"]] = inp[0] 
             else:
-                 inps[cache["i"]] = inp
+                print(inp.shape)
+                inps[cache["i"]] = inp
             cache["i"] += 1
-            return self.module(inp, **kwargs)
+            raise ValueError("Stop here")
     
     layers[0] = Catcher(layers[0])
 
@@ -51,8 +54,8 @@ def duquant(model: nn.Module, act_scales: dict, dataloader, args):
             if cache["i"] >= args.nsamples:
                 break
             try:
-                input_ids.append(batch['input_ids'])
-                model(batch['input_ids'].to(dev))
+                input_ids.append(batch)
+                model(batch.to(dev))
 
             except ValueError:
                 pass
@@ -64,11 +67,8 @@ def duquant(model: nn.Module, act_scales: dict, dataloader, args):
     duquant_parameters = {}
 
     torch.cuda.empty_cache()
-    quant_inps = inps
     rotate_inps = copy.copy(inps).mean(dim=0)
 
-    fp_inps = copy.deepcopy(inps)
-    
     for i in range(len(layers)):
         print("Starting Layer, " + str(i))
         args.q_quant_params = copy.copy(args.act_quant_params)
@@ -99,7 +99,7 @@ def duquant(model: nn.Module, act_scales: dict, dataloader, args):
 
                         qlayer.register_parameter(f"{pairs[key]}_smooth_scale",torch.nn.Parameter(scale, requires_grad=False))
 
-        qlayer.to(dtype=torch.bfloat16)
+        qlayer.to(dtype=dtype)
 
         try:
             with torch.no_grad():
@@ -117,7 +117,7 @@ def duquant(model: nn.Module, act_scales: dict, dataloader, args):
             qlayer.register_duquant_params()
             set_init_duquant_params_state(qlayer, True)
 
-        qlayer.to(dtype=torch.bfloat16)
+        qlayer.to(dtype=dtype)
         with torch.no_grad():
             for name, module in qlayer.named_modules():
                 if isinstance(module, QuantLinear):
@@ -133,8 +133,6 @@ def duquant(model: nn.Module, act_scales: dict, dataloader, args):
 
     model.model.transformer.embed_tokens = model.model.transformer.wte.to('cpu')
     del inps
-    del quant_inps
-    del fp_inps
     del rotate_inps
     
     torch.cuda.empty_cache()
@@ -187,13 +185,14 @@ def main(args):
     act_scales = torch.load(args.act_scales_path)
 
     # Build calibration dataloader
-    dataset = LLaDACalibrationDataset(
-        tokenizer=tokenizer,
-        seq_len=quant_args.seqlen,
-        samples=quant_args.nsamples,
-        block_size=quant_args.block_size,
-    )
-    dataloader = DataLoader(dataset, batch_size=quant_args.batch_size, shuffle=True)
+    # dataset = LLaDACalibrationDataset(
+    #     tokenizer=tokenizer,
+    #     seq_len=quant_args.seqlen,
+    #     samples=quant_args.nsamples,
+    #     block_size=quant_args.block_size,
+    # )
+    # dataloader = DataLoader(dataset, batch_size=quant_args.batch_size, shuffle=True)
+    dataloader, _ = get_wikitext2(nsamples=quant_args.nsamples, seed=0, seqlen=quant_args.seqlen, model=args.model_path)
 
     # Run DuQuant
     print("Running DuQuant calibration ...")

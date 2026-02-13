@@ -26,7 +26,7 @@ export HF_ALLOW_CODE_EVAL=1
 export HF_DATASETS_TRUST_REMOTE_CODE=true
 
 # Restrict to a single GPU
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 
 # ---------------------------------------------------------------------------
 # Default configuration
@@ -170,6 +170,9 @@ LOG_FILE="${LOG_DIR}/gsm8k_duquant_pipeline_${TIMESTAMP}.log"
   echo "Block length:      ${block_length}"
   echo "Batch size:        ${batch_size}"
   echo "Num few-shot:      ${num_fewshot}"
+  echo "W bits:            ${wbits}"
+  echo "A bits:            ${abits}"
+  echo "Symmetric:         ${symmetric}"
   echo "Limit:             ${limit:-'full dataset'}"
   echo "Prefix cache:      use_cache=${use_prefix_cache^}"
   echo "Show speed:        show_speed=True"

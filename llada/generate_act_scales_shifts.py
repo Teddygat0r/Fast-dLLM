@@ -8,6 +8,7 @@ import torch.nn as nn
 import functools
 from tqdm import tqdm
 
+from datautils import get_wikitext2
 from model.modeling_llada import LLaDAModelLM
 from quantization_calibration_dataset import LLaDACalibrationDataset
 
@@ -39,7 +40,7 @@ def get_act_scales(model, dataloader, num_samples=128):
                     functools.partial(stat_input_hook, name=name)))
 
     for i in tqdm(range(num_samples)):
-        input_ids = dataloader[i]["input_ids"].to(device).unsqueeze(0)
+        input_ids = dataloader[i].to(device)
         model(input_ids)
 
     for h in hooks:
@@ -117,13 +118,14 @@ def main():
     model, tokenizer = build_model_and_tokenizer(args.model)
     
     # Create calibration dataset using LLaDACalibrationDataset
-    dataloader = LLaDACalibrationDataset(
-        tokenizer=tokenizer,
-        seq_len=args.seq_len,
-        samples=args.num_samples,
-        block_size=args.block_size,
-        seed=args.seed
-    )
+    # dataloader = LLaDACalibrationDataset(
+    #     tokenizer=tokenizer,
+    #     seq_len=args.seq_len,
+    #     samples=args.num_samples,
+    #     block_size=args.block_size,
+    #     seed=args.seed
+    # )
+    dataloader, _ = get_wikitext2(nsamples=args.num_samples, seed=args.seed, seqlen=args.seq_len, model=args.model)
     
     args.net = args.model.split('/')[-1]
     act_scales = get_act_scales(model, dataloader, args.num_samples)
@@ -131,10 +133,10 @@ def main():
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     torch.save(act_scales, save_path)
 
-    act_shifts = get_act_shifts(model, dataloader, args.num_samples)
-    save_path = os.path.join(args.shifts_output_path, f'{args.net}.pt')
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    torch.save(act_shifts, save_path)
+    # act_shifts = get_act_shifts(model, dataloader, args.num_samples)
+    # save_path = os.path.join(args.shifts_output_path, f'{args.net}.pt')
+    # os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    # torch.save(act_shifts, save_path)
 
 
 if __name__ == '__main__':
