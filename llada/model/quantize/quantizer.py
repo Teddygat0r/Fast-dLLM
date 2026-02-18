@@ -7,7 +7,8 @@ import math
 from model.quantize.const import CLIPMAX, CLIPMIN
 import random
 
-
+import os
+import pickle
 
 def round_ste(x: torch.Tensor):
     """
@@ -16,40 +17,39 @@ def round_ste(x: torch.Tensor):
     return (x.round() - x).detach() + x
 
 
-def get_rot(block_size: int, device: torch.device) -> torch.Tensor:
-    """
-    Construct a simple orthogonal rotation matrix that rotates in the
-    first two dimensions. The `exchange_row_col` helper is later used
-    to move this 2D rotation to arbitrary row/column pairs.
-    """
-    theta = math.pi / 4  # 45 degree rotation
-    R = torch.eye(block_size, device=device, dtype=torch.float32)
-    if block_size >= 2:
-        c, s = math.cos(theta), math.sin(theta)
-        R[0, 0] = c
-        R[0, 1] = -s
-        R[1, 0] = s
-        R[1, 1] = c
-    return R
+def exchange_row_col(_tensor, i, j):
+    tensor = _tensor.detach().clone()
+    assert isinstance(tensor, torch.Tensor)
+    indices_row = torch.arange(tensor.size(0))
+    indices_row[i], indices_row[j] = indices_row[j].item(), indices_row[i].item()
+    tensor = tensor[indices_row]
 
+    indices_col = torch.arange(tensor.size(1))
+    indices_col[i], indices_col[j] = indices_col[j].item(), indices_col[i].item()
+    tensor = tensor[:, indices_col]
+    return tensor
 
-def exchange_row_col(mat: torch.Tensor, i: int, j: int) -> torch.Tensor:
-    """
-    Swap both row i/j and column i/j of a square matrix.
-    This preserves symmetry/orthogonality of rotation matrices.
-    """
-    if i == j:
-        return mat
-    mat = mat.clone()
-    # swap rows
-    tmp = mat[i, :].clone()
-    mat[i, :] = mat[j, :]
-    mat[j, :] = tmp
-    # swap cols
-    tmp = mat[:, i].clone()
-    mat[:, i] = mat[:, j]
-    mat[:, j] = tmp
-    return mat
+Rot = {}
+def get_rot(n, device='cpu'):
+    try:        
+        FILE_PATH = os.path.abspath(__file__)
+        BASE_DIR = os.path.dirname(FILE_PATH)    
+        # Go up two levels to find Rot.pkl in Fast-dLLM/llada
+        rot_path = os.path.abspath(os.path.join(BASE_DIR, '../../Rot.pkl'))
+        
+        if Rot.get(n) is None:
+            Rot[n] = pickle.load(open(rot_path, "rb"))[n]
+        R = Rot[n].to(device)
+        random_matrix = torch.randn(n-1, n-1).to(device)
+        q, r = torch.linalg.qr(random_matrix)
+        q = torch.cat([torch.zeros(n-1, 1).to(device), q], dim=1)
+        q = torch.cat([torch.zeros(1, n).to(device), q], dim=0)
+        q[0, 0] = 1
+        R = torch.matmul(R,q)
+        return R
+    except Exception as e:
+        print(f"Error loading rotation matrix: {e}")
+        assert False, 'No such rotate matrix'
 
 
 def get_hadamard(n): 
@@ -474,7 +474,7 @@ class UniformAffineQuantizer(nn.Module):
         del self.scale
         del self.round_zero_point
 
-    def register_duquant_params(self, permutation_list_length = 4096):
+    def register_duquant_params(self):
         if self.rotate is not True:
             return
         permutation_list, R = self.permutation_list, self.R

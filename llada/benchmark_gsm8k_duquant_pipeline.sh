@@ -26,7 +26,7 @@ export HF_ALLOW_CODE_EVAL=1
 export HF_DATASETS_TRUST_REMOTE_CODE=true
 
 # Restrict to a single GPU
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 
 # ---------------------------------------------------------------------------
 # Default configuration
@@ -42,6 +42,7 @@ num_fewshot=5
 batch_size=1
 wbits=8
 abits=8
+symmetric=false
 model_path="GSAI-ML/LLaDA-8B-Instruct"
 
 # Prefix cache setting
@@ -71,6 +72,7 @@ usage() {
   echo "  --duquant-weight-path PATH   # path to pre-saved DuQuant .pth (default: models/quantized_model.pth)"
   echo "  --no-duquant-weights         # skip DuQuant benchmark (do not run with saved weights)"
   echo "  --no-prefix-cache            # disable prefix cache (use_cache=False)"
+  echo "  --symmetric                  # use symmetric quantization (default: False)"
   echo "  -h, --help                   # show this help"
   exit 1
 }
@@ -128,6 +130,11 @@ while [[ $# -gt 0 ]]; do
       abits="$2"
       shift 2
       ;;
+    --symmetric)
+      [[ $# -ge 2 ]] || usage
+      symmetric="$2"
+      shift 2
+      ;;
     -h)
       usage
       ;;
@@ -163,6 +170,9 @@ LOG_FILE="${LOG_DIR}/gsm8k_duquant_pipeline_${TIMESTAMP}.log"
   echo "Block length:      ${block_length}"
   echo "Batch size:        ${batch_size}"
   echo "Num few-shot:      ${num_fewshot}"
+  echo "W bits:            ${wbits}"
+  echo "A bits:            ${abits}"
+  echo "Symmetric:         ${symmetric}"
   echo "Limit:             ${limit:-'full dataset'}"
   echo "Prefix cache:      use_cache=${use_prefix_cache^}"
   echo "Show speed:        show_speed=True"
@@ -211,7 +221,7 @@ LOG_FILE="${LOG_DIR}/gsm8k_duquant_pipeline_${TIMESTAMP}.log"
         --batch_size "${batch_size}" \
         --confirm_run_unsafe_code \
         --model llada_dist \
-        --model_args "model_path=${model_path},gen_length=${length},steps=${length},block_length=${block_length},use_cache=${use_prefix_cache^},show_speed=True,use_duquant_pipeline=True,duquant_weight_path=${duquant_weight_path},wbits=${wbits},abits=${abits}"
+        --model_args "model_path=${model_path},gen_length=${length},steps=${length},block_length=${block_length},use_cache=${use_prefix_cache^},show_speed=True,use_duquant_pipeline=True,duquant_weight_path=${duquant_weight_path},wbits=${wbits},abits=${abits},symmetric=${symmetric}"
       echo ""
     fi
   else
