@@ -179,6 +179,47 @@ def replace_linear_layers(model, quant_args, weights):
             del module
     gc.collect()
 
+def replace_act_quantizer_with_inference(quant_linear):
+    """Replace a QuantLinear's act_quantizer with an InferenceQuantizer.
+
+    Copies n_bits, lac, block_size, permutation_times, and DuQuant buffers
+    (R, permutation_list) from the existing UniformAffineQuantizer.
+
+    Args:
+        quant_linear: A QuantLinear layer with an existing act_quantizer.
+    """
+    from model.quantize.inference_quantizer import InferenceQuantizer
+
+    old = quant_linear.act_quantizer
+    if old is None:
+        return
+
+    infer = InferenceQuantizer(
+        n_bits=old.n_bits,
+        lac=old.lac,
+        block_size=old.block_size,
+        permutation_times=old.permutation_times,
+    )
+
+    # Copy pre-calibrated DuQuant buffers
+    # R must be float32 (rotations are done in FP32 for precision)
+    if hasattr(old, 'R') and old.R is not None:
+        infer.R = old.R.clone().detach().float()
+    if hasattr(old, 'permutation_list') and old.permutation_list is not None:
+        try:
+            infer.permutation_list = old.permutation_list.clone().detach()
+        except Exception:
+            infer.permutation_list = old.permutation_list
+
+    infer._resolve_permutation_type()
+    quant_linear.act_quantizer = infer
+
+def replace_act_quantizers_with_inference(model):
+    from model.quantize.int_linear import QuantLinear
+    for name, module in model.named_modules():
+        if isinstance(module, QuantLinear):
+            replace_act_quantizer_with_inference(module)
+
 @torch.no_grad()
 def set_init_duquant_params_state(model, mode):
     if isinstance(mode, bool):
