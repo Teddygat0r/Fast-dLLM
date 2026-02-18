@@ -4,7 +4,7 @@ import gc
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from duquant_utils import create_quant_args, set_init_duquant_params_state, set_quant_state, smooth_and_let_inplace
+from duquant_utils import create_quant_args, set_init_duquant_params_state, set_quant_state, smooth_and_let_inplace, set_registered_x_none
 from datautils import get_wikitext2
 from model.quantize.int_linear import QuantLinear
 from model.int_llada_layer import LLaDaQuantLayer
@@ -146,6 +146,15 @@ def main(args):
     from transformers import AutoTokenizer
     from model.modeling_llada import LLaDAModelLM
     from quantization_calibration_dataset import LLaDACalibrationDataset
+
+    # Check for Rot.pkl
+    FILE_PATH = os.path.abspath(__file__)
+    BASE_DIR = os.path.dirname(FILE_PATH)
+    rot_path = f'{BASE_DIR}/Rot.pkl'
+    if not os.path.exists(rot_path) and args.quant_method == "duquant":
+        import get_rot
+        print("Rot.pkl not found, generating...")
+        get_rot.main()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
