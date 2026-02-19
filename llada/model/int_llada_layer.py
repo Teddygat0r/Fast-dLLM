@@ -95,6 +95,8 @@ class LLaDaQuantLayer(LLaDALlamaBlock):
         Computes scaled dot product attention on query, key and value tensors, using an optional
         attention mask if passed, and applying dropout if a probability greater than 0.0 is specified.
         """
+        from fouroversix import fp4_matmul
+
         assert k.size(1) == v.size(1)
         num_kv_heads = k.size(1)
         num_q_heads = q.size(1)
@@ -108,19 +110,27 @@ class LLaDaQuantLayer(LLaDALlamaBlock):
         # no biases
         # attn_bias = torch.zeros(L, S, dtype=q.dtype, device=q.device)
 
-        # attn_weight = q @ k.transpose(-2, -1) * scale_factor
-        q = self.qkt_matmul.quant_x1(q)
-        k = self.qkt_matmul.quant_x2(k).transpose(-2, -1)
-        attn_weight = self.qkt_matmul(q, k) * scale_factor
+        # fp4_matmul currently expects 2D inputs; run per (batch, head) slice.
+        leading_shape = q.shape[:-2]
+        q_flat = q.reshape(-1, L, q.size(-1))
+        k_flat = k.reshape(-1, S, k.size(-1))
+        attn_weight = torch.stack(
+            [fp4_matmul(q_flat[i], k_flat[i]) for i in range(q_flat.size(0))], dim=0
+        ).reshape(*leading_shape, L, S)
+
+        attn_weight = attn_weight * scale_factor
 
         # attn_weight += attn_bias
         attn_weight = torch.softmax(attn_weight, dim=-1)
         attn_weight = torch.dropout(attn_weight, dropout_p, train=self.training)
 
-        # return attn_weight @ v
-        attn_weight = self.pv_matmul.quant_x1(attn_weight)
-        v = self.pv_matmul.quant_x2(v)
-        return self.pv_matmul(attn_weight, v)
+        # fp4_matmul computes a @ b.T, so pass v.transpose to recover attn_weight @ v.
+        D = v.size(-1)
+        attn_flat = attn_weight.reshape(-1, L, S).to(dtype=q.dtype)
+        v_flat = v.reshape(-1, S, D)
+        return torch.stack(
+            [fp4_matmul(attn_flat[i], v_flat[i].transpose(-2, -1).contiguous()) for i in range(attn_flat.size(0))], dim=0
+        ).reshape(*leading_shape, L, D)
     
     def set_quant_state(self, weight_quant: bool = False, act_quant: bool = False):
         self.qkt_matmul.set_quant_state(weight_quant, act_quant)

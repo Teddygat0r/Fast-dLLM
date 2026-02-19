@@ -6,7 +6,7 @@ import numpy as np
 import math
 from model.quantize.const import CLIPMAX, CLIPMIN
 import random
-
+from fouroversix import QuantizationConfig, quantize_to_fp4
 import os
 import pickle
 
@@ -428,11 +428,12 @@ class UniformAffineQuantizer(nn.Module):
         if self.metric == "fix0to1":
             return x.mul_(2**self.n_bits-1).round_().div_(2**self.n_bits-1)
 
-        if self.dynamic_method == "per_token" or self.dynamic_method == "per_channel":
-            self.per_token_dynamic_calibration(x)
-        else:
-            raise NotImplementedError()
-        x_dequant = self.fake_quant(x, self.scale, self.round_zero_point)
+        # if self.dynamic_method == "per_token" or self.dynamic_method == "per_channel":
+        #     self.per_token_dynamic_calibration(x)
+        # else:
+        #     raise NotImplementedError()
+        # x_dequant = self.fake_quant(x, self.scale, self.round_zero_point)
+        x_dequant = self.four_over_six_quantize(x)
         return x_dequant
 
     def per_token_dynamic_calibration(self, x):
@@ -501,11 +502,19 @@ class UniformAffineQuantizer(nn.Module):
                 if hasattr(self, name.split('.')[-1]):
                     delattr(self, name.split('.')[-1])
                 self.register_buffer(name.split('.')[-1], param.clone().detach().to('cuda'))
-        
+
     def load_scales_and_zeros(self, state_dict, layer_name = ""):
         for name, param in state_dict.items():
             if name.find(layer_name) > -1 and (name.find('scales') > -1 or name.find('zeros') > -1):
                 if hasattr(self, name.split('.')[-1]):
                     delattr(self, name.split('.')[-1])
                 self.register_buffer(name.split('.')[-1], param.clone().detach().to('cuda'))
-        
+
+    def four_over_six_quantize(self, x):
+        orig_shape = x.shape
+        x_2d = x.reshape(-1, orig_shape[-1])
+
+        q = quantize_to_fp4(x_2d)
+        x_dequant_2d = q.dequantize(x.dtype)
+
+        return x_dequant_2d.reshape(orig_shape)

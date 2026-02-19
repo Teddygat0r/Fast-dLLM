@@ -4,10 +4,11 @@ import gc
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from duquant_utils import create_quant_args, set_init_duquant_params_state, set_quant_state, smooth_and_let_inplace, set_registered_x_none
+from duquant_utils import create_quant_args, set_init_duquant_params_state, set_quant_state, smooth_and_let_inplace
 from datautils import get_wikitext2
 from model.quantize.int_linear import QuantLinear
 from model.int_llada_layer import LLaDaQuantLayer
+import os
 
 CLIPMIN = 1e-5
 
