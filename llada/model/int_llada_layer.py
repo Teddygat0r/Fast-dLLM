@@ -110,12 +110,19 @@ class LLaDaQuantLayer(LLaDALlamaBlock):
         # no biases
         # attn_bias = torch.zeros(L, S, dtype=q.dtype, device=q.device)
 
+        def _matmul_with_fp4_fallback(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+            # fp4_matmul quantization kernels require the shared N dimension to be 64-aligned.
+            shared_n = a.size(-1)
+            if shared_n % 64 != 0:
+                return torch.matmul(a, b.transpose(-2, -1))
+            return fp4_matmul(a, b)
+
         # fp4_matmul currently expects 2D inputs; run per (batch, head) slice.
         leading_shape = q.shape[:-2]
         q_flat = q.reshape(-1, L, q.size(-1))
         k_flat = k.reshape(-1, S, k.size(-1))
         attn_weight = torch.stack(
-            [fp4_matmul(q_flat[i], k_flat[i]) for i in range(q_flat.size(0))], dim=0
+            [_matmul_with_fp4_fallback(q_flat[i], k_flat[i]) for i in range(q_flat.size(0))], dim=0
         ).reshape(*leading_shape, L, S)
 
         attn_weight = attn_weight * scale_factor
@@ -129,7 +136,7 @@ class LLaDaQuantLayer(LLaDALlamaBlock):
         attn_flat = attn_weight.reshape(-1, L, S).to(dtype=q.dtype)
         v_flat = v.reshape(-1, S, D)
         return torch.stack(
-            [fp4_matmul(attn_flat[i], v_flat[i].transpose(-2, -1).contiguous()) for i in range(attn_flat.size(0))], dim=0
+            [_matmul_with_fp4_fallback(attn_flat[i], v_flat[i].transpose(-2, -1).contiguous()) for i in range(attn_flat.size(0))], dim=0
         ).reshape(*leading_shape, L, D)
     
     def set_quant_state(self, weight_quant: bool = False, act_quant: bool = False):
